@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 検証の中身は check.sh に一本化してある。CI とローカルと Stop ゲートが
+      # 同じものを呼ぶので、「CI では通るがローカルでは違う」がそもそも起きない。
+      - name: verify
+        run: ./check.sh
+
+  mutants:
+    # ガードの棚卸し。修正だけしてガードを付けていない変更を落とす。
+    # 約 2.5 分かかるので verify とは別ジョブにして並走させる。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: mutation audit
+        run: ./check.sh --mutants

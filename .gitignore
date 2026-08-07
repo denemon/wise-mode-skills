@@ -1,0 +1,24 @@
+# Exclude all dotfiles
+.*
+
+# Track .gitignore itself
+!.gitignore
+
+# Track CI. `.*` excludes the directory, and git never descends into an
+# excluded directory, so re-including .github/workflows/*.yml alone does nothing.
+!.github/
+
+# Track this repo's own Claude Code setup (the verification recipe, and any
+# development hooks added later) — same trap as .github/ above. Local session
+# state stays out; the re-ignore rules below win because they come last.
+!.claude/
+.claude/settings.local.json
+.claude/log/
+.claude/flow/
+.claude/.wise-mode
+.claude/.terse-mode
+.claude/.check-gate
+
+# Python bytecode
+__pycache__/
+*.py[cod]

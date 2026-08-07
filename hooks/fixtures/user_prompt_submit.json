@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Claude Code が UserPromptSubmit でコマンド型フックの stdin に渡す JSON。",
+    "mode_persistence.py が読む唯一のキーは `prompt` と `cwd`。",
+    "",
+    "post_tool_use_bash.json と同じ規約: これが外部契約の唯一の正であり、",
+    "テストは必ずここからペイロードを組み立てる。手書きで足すのではなく、",
+    "CLAUDE_HOOK_RECORD=<dir> を付けて Claude Code を 1 ターン動かして採取し、",
+    "差分を確認してから更新すること。",
+    "",
+    "検証済み: このフックの応答は hookSpecificOutput.additionalContext に入る",
+    "（公式 hook-development ドキュメントの Hook Output Format）。"
+  ],
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "cwd": "/tmp/project",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "/wise-cont"
+}

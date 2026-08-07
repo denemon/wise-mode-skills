@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "Claude Code が PostToolUse でコマンド型フックの stdin に渡す JSON。外部契約なので、",
+    "推測ではなく実物に合わせること。ここがこのリポジトリで唯一の正とし、テストは",
+    "必ずこのファイルからペイロードを組み立てる。実装とテストが同じ思い込みを共有した結果、",
+    "`tool_result` を読み続けて出力が丸ごと記録されない状態が長く残った。",
+    "",
+    "確認元: Anthropic 公式プラグイン claude-plugins-official/plugins/security-guidance/",
+    "hooks/security_reminder_hook.py — input_data.get('tool_response') を読み、Bash の",
+    "tool_response は {stdout, stderr, interrupted} で exit_code を持たないと明記している。",
+    "`tool_result` はプロンプト型フックのテンプレート変数 $TOOL_RESULT の名前であって、",
+    "コマンド型フックの stdin JSON には存在しない。",
+    "",
+    "更新するときは実物と突き合わせてからにすること。"
+  ],
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "cwd": "/tmp/project",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm test",
+    "description": "Run unit tests"
+  },
+  "tool_response": {
+    "stdout": "PASS src/app.test.ts\nTests: 1 passed",
+    "stderr": "",
+    "interrupted": false
+  }
+}
