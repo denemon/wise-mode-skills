@@ -1,26 +1,24 @@
-name: tests
+# CI — check.sh がローカルと CI の唯一の検証入口(README「CI runs the same
+# script」、tests/test_packaging.py の SingleCheckEntrypointTest が固定)。
+# ここに独自のチェックを並べ直さないこと。check.sh を迂回する層を作らない。
+name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
-  verify:
+  # 回帰ジョブ。統合テスト込みの全層(~25s)。
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: ./check.sh
 
-      # 検証の中身は check.sh に一本化してある。CI とローカルと Stop ゲートが
-      # 同じものを呼ぶので、「CI では通るがローカルでは違う」がそもそも起きない。
-      - name: verify
-        run: ./check.sh
-
+  # 変異監査。ガード(テスト)自体が生きているかの棚卸し(~2.5min)。
   mutants:
-    # ガードの棚卸し。修正だけしてガードを付けていない変更を落とす。
-    # 約 2.5 分かかるので verify とは別ジョブにして並走させる。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: mutation audit
-        run: ./check.sh --mutants
+      - run: ./check.sh --mutants
