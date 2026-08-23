@@ -33,10 +33,20 @@
 
 最初に成功したものを `BASE_REF`(SHA)とし、以下を設定:
 
-- `RANGE = "${BASE_REF}...${TARGET_REF}"`
-- `RANGE_LABEL = "${BASE_REF}...${TARGET_REF}"`(`TARGET_REF=HEAD` の場合はブランチ名に解決して表示してもよい)
-- 差分取得: `git diff "$RANGE"`
-- 規模確認: `git diff --stat "$RANGE"`
+- 明示ブランチの場合:
+  - `RANGE = "${BASE_REF}...${TARGET_REF}"`
+  - `RANGE_LABEL = "$RANGE"`
+  - 差分取得: `git diff "$RANGE"`
+  - 規模確認: `git diff --stat "$RANGE"`
+- 引数なしの HEAD ルートの場合:
+  - `RANGE_LABEL = "${BASE_REF}...HEAD + worktree"`
+  - committed / staged / unstaged の取得: `git diff "$BASE_REF"`
+  - 未追跡ファイルの列挙: `git ls-files --others --exclude-standard`
+  - 列挙した各ファイルを `git diff --no-index -- /dev/null "$path"` で差分に追加する
+    (差分ありの終了コード 1 は正常。1 以外は取得失敗として停止する)
+
+HEAD ルートで `git diff "$BASE_REF"` だけを使う理由は、`BASE_REF...HEAD` が
+作業ツリーを含まず、PR 作成直前の staged / unstaged 変更を落とすため。
 
 すべての merge-base が失敗した場合は base 不明として停止し、ユーザに明示的な base 指定を依頼する。
 `origin/*` を使う場合、リモート未 fetch だと古い base を返す可能性があるため、
@@ -68,7 +78,7 @@
 
 1-B の各ルートで取得した diff に対して、共通で以下を実施する:
 
-1. 変更ファイル一覧と追加/削除行数を把握(コマンドは 1-B の各節を参照)
+1. 変更ファイル一覧と追加/削除行数を把握(HEAD ルートでは未追跡ファイルも含める)
 2. **0 行** の場合は「対象の変更がありません」と報告して停止
 3. **巨大すぎる(>2000 行)** 場合は、停止せず以下を提示してユーザに選ばせる:
    - (a) このまま全件レビュー(時間がかかる)

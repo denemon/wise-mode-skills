@@ -93,6 +93,45 @@ class ModePersistenceTest(unittest.TestCase):
         run("UserPromptSubmit", "normal mode")
         self.assertEqual(run("UserPromptSubmit", "go on"), "")
 
+    # ── should-not-trigger ───────────────────────────────────────
+    # 以下 3 つは実セッションで誤発火が再現されたプロンプト。モード語を
+    # 「含む質問」でモードが切り替わってはいけない（起動は [/$@] 接頭辞必須、
+    # normal mode の全消しは行全体一致のみ）。
+    def test_question_mentioning_wise_cont_does_not_activate(self):
+        self.assertEqual(run("UserPromptSubmit", "wise-cont はどう動く?"), "")
+        self.assertFalse(self.flag(".wise-mode").exists())
+
+    def test_question_mentioning_terse_mode_does_not_activate(self):
+        self.assertEqual(run("UserPromptSubmit", "terse-mode の実装を確認して"), "")
+        self.assertFalse(self.flag(".terse-mode").exists())
+
+    def test_question_mentioning_normal_mode_does_not_deactivate(self):
+        run("UserPromptSubmit", "/wise-cont")
+        self.assertIn("WISE MODE ACTIVE",
+                      run("UserPromptSubmit", "normal mode の意味を教えて"))
+        self.assertTrue(self.flag(".wise-mode").exists())
+
+    def test_question_mentioning_wise_cont_off_does_not_deactivate(self):
+        # OFF 側も同じ誤発火クラス。コマンド形（wise-cont-off）は接頭辞必須。
+        # 自然文の "stop wise" / "turn off wise" は従来どおり接頭辞不要。
+        run("UserPromptSubmit", "/wise-cont")
+        self.assertIn("WISE MODE ACTIVE",
+                      run("UserPromptSubmit", "wise-cont-off の使い方は?"))
+        self.assertTrue(self.flag(".wise-mode").exists())
+
+    def test_question_mentioning_terse_mode_off_does_not_deactivate(self):
+        run("UserPromptSubmit", "/terse-mode")
+        self.assertIn("TERSE MODE ACTIVE",
+                      run("UserPromptSubmit", "terse-mode off とはどういう意味?"))
+        self.assertTrue(self.flag(".terse-mode").exists())
+
+    def test_back_to_normal_mode_still_deactivates(self):
+        # wise-cont/SKILL.md が案内する "back to normal mode" は行全体一致に
+        # 収まるので、アンカー追加後も効き続けること。
+        run("UserPromptSubmit", "/wise-cont")
+        run("UserPromptSubmit", "back to normal mode")
+        self.assertEqual(run("UserPromptSubmit", "go on"), "")
+
     # ── 頑健性 ───────────────────────────────────────────────────
     def test_inactive_by_default(self):
         self.assertEqual(run("UserPromptSubmit", "fix the login bug"), "")

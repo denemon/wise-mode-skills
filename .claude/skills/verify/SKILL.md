@@ -24,15 +24,18 @@ hooks while the suite stayed green — because the test read the settings.
 the whole installed tree against `SKILLS` + `HOOK_FILES` in both directions. When
 verifying by hand, do the same: `ls .claude/hooks/` before believing anything.
 
-## install.sh — serve the repo locally
+## install.sh — serve a local snapshot archive
 
-`REPO_RAW_BASE` points at GitHub, so running it unmodified verifies the
-*published* version, not your working tree. Serve the repo and swap that one
-line:
+`REPO_ARCHIVE_BASE` points at GitHub's tarball endpoint, so running it
+unmodified verifies the *published* snapshot, not your working tree. Build a
+tar.gz of the working tree, serve it, and swap that one line:
 
 ```bash
-python3 -m http.server 8731 --directory . &
-sed 's|REPO_RAW_BASE="https://raw.githubusercontent.com/den-emon/wise-mode/main"|REPO_RAW_BASE="http://127.0.0.1:8731"|' \
+mkdir -p /tmp/wise-serve/tar.gz
+tar -czf /tmp/wise-serve/tar.gz/main --exclude .git --exclude __pycache__ \
+  -s '|^\./|wise-mode-main/|' .   # GNU tar: --transform 's|^\./|wise-mode-main/|'
+python3 -m http.server 8731 --directory /tmp/wise-serve &
+sed 's|REPO_ARCHIVE_BASE="https://codeload.github.com/den-emon/wise-mode/tar.gz"|REPO_ARCHIVE_BASE="http://127.0.0.1:8731/tar.gz"|' \
   install.sh > /tmp/install-local.sh
 mkdir -p /tmp/proj/.claude && cd /tmp/proj && bash /tmp/install-local.sh </dev/null
 ```
@@ -72,24 +75,42 @@ prompt and confirm the reminder is re-injected. A single call proves nothing.
 ## ai_review.sh — fake `claude` on PATH
 
 ```bash
-printf '#!/bin/sh\ncat >/dev/null\necho %s\n' "'{\"score\":8,\"findings\":[]}'" > fakebin/claude
+cd /tmp/proj
+git init -q
+printf '.claude/\nfakebin/\n' >> .git/info/exclude
+printf 'review fixture\n' >> ai-review-fixture.txt
+git add ai-review-fixture.txt
+mkdir -p fakebin
+printf '#!/bin/sh\ncat >/dev/null\necho %s\n' "'{\"summary\":\"ok\",\"score\":8,\"coverage\":\"complete\",\"findings\":[],\"positive_notes\":[]}'" > fakebin/claude
 chmod +x fakebin/claude
-PATH="$PWD/fakebin:$PATH" bash .claude/skills/dev-with-review/scripts/ai_review.sh --lang python
+PATH="$PWD/fakebin:$PATH" bash .claude/skills/wise-flow/scripts/ai_review.sh --lang python --worktree
 ```
 
 **Always shadow `claude`.** A dev machine has the real one; forgetting the fake
 makes a billed API call and silently passes. `tests/test_ai_review.py` installs
 a guard stub that exits 97 for exactly this reason.
 
-Stage a change (`git add`) before running — plain `git diff` is empty once
-staged, which is the situation this script is used in.
+The disposable `/tmp/proj` fixture intentionally stages a change before running:
+plain `git diff` is empty once staged, which is the situation this script is
+used in. Do not use this fixture recipe in a real working repository.
 
-## Skills (Markdown) — no runtime surface
+## Skills (Markdown) — behaviour has a live eval surface
 
-Prompt content cannot be verified by running anything. Cross-file invariants
-(command lists, allowed-tools, mode vocabulary) are covered by
-`tests/test_packaging.py`; behaviour is not measurable except via
-`benchmarks/fix_follow_rate.py` over months. Report SKIP for docs-only changes.
+Static checks (`tests/test_packaging.py`, `tests/test_skill_review_safety.py`)
+only prove the desired sentences exist in the SKILL.md — not that Claude
+follows them. The runtime surface is:
+
+```bash
+./check.sh --evals            # real claude -p calls — billed, needs auth
+```
+
+It builds a fresh fixture repo, installs the skills into it, runs
+representative prompts in fresh sessions — including a skill-off baseline, per
+the official recommendation — and asserts the MANDATORY markers each SKILL.md
+defines. Run it after a meaningful behaviour change to a skill. Report SKIP
+only for changes no eval can observe (wording-only edits), and name the eval
+that covers the rest. Long-horizon effect is still
+`benchmarks/fix_follow_rate.py`.
 
 ## Strip ANSI before grepping
 
@@ -101,7 +122,7 @@ pty. `^\[warn\]` will not match `\033[0;33m[warn]`. Pipe through
 
 ```bash
 ./check.sh            # everything: bash -n, shellcheck, py syntax, 3 suites (~25s)
-./check.sh --fast     # skips the two slow integration suites (~3s)
+./check.sh --fast     # skips the slow integration suites (~3s)
 ./check.sh --mutants  # audits the guards themselves (~2.5min)
 ```
 

@@ -3,8 +3,9 @@ name: terse-mode
 description: >
   Brevity-first response mode that removes filler while preserving technical accuracy.
   Supports intensity levels: lite, full (default), and ultra.
-  Use when the user asks for terse mode, fewer tokens, terse answers, no fluff,
-  "be brief", or invokes /terse-mode or $terse-mode.
+  Invoke only through `/terse-mode` or `$terse-mode`; the selected level persists
+  until the user runs `/terse-mode off`.
+disable-model-invocation: true
 ---
 
 # Terse Mode

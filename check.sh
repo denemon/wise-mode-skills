@@ -8,6 +8,7 @@
 #   ./check.sh            全層（統合テスト込み、約25秒）
 #   ./check.sh --fast     遅い統合スイートを除外（約2秒）。Stop ゲートはこれ
 #   ./check.sh --mutants  ガードの棚卸し（約2.5分）。CI と手動のみ
+#   ./check.sh --evals    スキル挙動の実測（課金される実 claude -p 呼び出し）。手動のみ
 #
 # `set -e` は使わない。最初の失敗で止めると残りの状態が分からず、直す順番を
 # 決められない。全部走らせてから落とす。
@@ -27,9 +28,10 @@ case "${1:-}" in
     "")        ;;
     --fast)    FAST=1 ;;
     --mutants) exec python3 tools/mutants.py "${@:2}" ;;
+    --evals)   exec python3 tools/evals.py "${@:2}" ;;
     *)
         printf 'check.sh: unknown option: %s\n' "$1" >&2
-        printf 'usage: check.sh [--fast | --mutants [name...]]\n' >&2
+        printf 'usage: check.sh [--fast | --mutants [name...] | --evals [name...]]\n' >&2
         exit 2
         ;;
 esac
@@ -47,7 +49,7 @@ fi
 SUITE_TIMEOUT=120
 
 # 遅い統合スイート。実プロセスを起動するので秒単位でかかる。
-SLOW_TESTS="test_install|test_ai_review"
+SLOW_TESTS="test_install|test_ai_review|test_evals"
 
 fail=0
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }

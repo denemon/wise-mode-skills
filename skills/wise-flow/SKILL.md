@@ -1,12 +1,11 @@
 ---
 name: wise-flow
 description: >
-  Source-first Claude Code development workflow, from reading the code to opening
-  the PR. Runs recon → plan → implement → validate → security gate → PR gate →
-  handoff as phases of one skill. Use when the user asks for /wise-flow, a full
-  code-development flow, "from reading code to PR", source-first implementation,
-  一連の流れ, or names any single phase (recon, plan, validate, handoff).
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Skill, Agent, TodoWrite, WebFetch, AskUserQuestion
+  Source-first Claude Code development workflow, from reading the code to PR
+  readiness. Runs recon → plan → implement → validate → security gate → PR gate →
+  handoff as phases of one skill. Invoke only through `/wise-flow` when the user
+  explicitly requests the full workflow or one of its phases.
+disable-model-invocation: true
 ---
 
 # Wise Flow
@@ -26,7 +25,8 @@ file before running that phase** — do not run a phase from its name alone.
 | plan | `references/plan.md` | Implementation Plan | `.claude/flow/plan.md` |
 | implement-review | `references/implement-review.md` | Change Pack | `.claude/flow/implement-review.md` |
 | validate | `references/validate.md` | Validation Report | `.claude/flow/validate.md` |
-| security-gate | `references/security-gate.md` (runs `attack-on-hacker`) | Security Gate Report | `.claude/flow/security-gate.md` |
+| security-gate | `references/security-gate.md` (applies the `attack-on-hacker` methodology) | Security Gate Report | `.claude/flow/security-gate.md` |
+| independent-review | `references/independent-review.md` (runs `scripts/ai_review.sh`) | Independent Review Report | `.claude/flow/independent-review.md` |
 | pr-gate | the `pr-self-review` skill | PR Readiness Report | `.claude/flow/pr-gate.md` |
 | handoff | `references/handoff.md` | Handoff Note | `.claude/flow/handoff.md` |
 
@@ -39,6 +39,25 @@ its report to `.claude/flow/pr-gate.md` after receiving it.
 
 If a phase cannot produce its artifact, stop and explain the blocking unknown.
 Do not proceed by guessing.
+
+## Authorization Invariants (MANDATORY)
+
+This section is the only authority for external or delegated side effects. Phase
+references may record eligibility, but must not grant authorization themselves.
+
+- Apply the swarm methodology only if the user explicitly requested delegation,
+  subagents, or parallel execution and the work has non-overlapping write
+  scopes. The `/swarm` skill is user-invocation-only
+  (`disable-model-invocation: true`), so never try to invoke it as a skill;
+  read its side-effect-free reference instead
+  (repository path: `skills/swarm/references/methodology.md`; installed path:
+  `.claude/skills/swarm/references/methodology.md`).
+- Run the independent-review gate only when the user explicitly requested an
+  independent or external AI review. It sends the diff to an external reviewer
+  (`claude -p`, billed): before every run, show the user the exact diff file and
+  get approval, per `references/independent-review.md`.
+- The PR gate produces readiness evidence only. Create, push, or open a PR only
+  when the user explicitly requested that corresponding action.
 
 ## Artifact Persistence (MANDATORY)
 
@@ -68,49 +87,75 @@ above, prefixed with this header:
 
 ```
 <!-- task: <the flow goal, one line> -->
+<!-- head: <HEAD commit SHA, or "unknown"> -->
 <!-- state: <state fingerprint, or "n/a"> -->
 ```
 
 The state fingerprint is the worktree identity:
 
 ```bash
-{ git rev-parse HEAD && git status --porcelain; } | shasum | cut -c1-12
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  {
+    git rev-parse HEAD
+    git diff --binary HEAD
+    git ls-files --others --exclude-standard -z |
+      while IFS= read -r -d '' path; do
+        printf 'untracked %s\0' "$path"
+        if [ -L "$path" ]; then
+          readlink "$path"
+        else
+          LC_ALL=C shasum "$path"
+        fi
+      done
+  } | LC_ALL=C shasum | cut -c1-12
+else
+  printf 'unknown\n'
+fi
 ```
 
-Outside a git repository both commands fail and the hash becomes a constant.
-Write `state: unknown` in that case and **never reuse a result artifact** —
-re-run the phase. A constant fingerprint would make every stale gate look fresh.
+Outside a git repository or before the first commit, this prints `unknown`.
+**Never reuse a result artifact** in that state — re-run the phase. The diff and
+untracked-file hashes make content edits change the fingerprint even while
+`git status --porcelain` would keep reporting the same `M` or `??` state.
 
 **Reuse.** Before running a phase, read its artifact file if it exists. Two
 classes, different invalidation — do not treat them alike:
 
 | Class | Phases | Reuse when |
 |-------|--------|------------|
-| context | source-recon, plan | `task` matches the current goal. State is irrelevant; recon stays valid after you edit code, so record `state: n/a`. |
-| result | implement-review, validate, security-gate, pr-gate, handoff | `task` matches **and** `state` equals the current fingerprint. |
+| context | source-recon, plan | `task` and `head` match the current goal and current HEAD. Record `state: n/a`; uncommitted implementation edits do not invalidate context. |
+| result | implement-review, validate, security-gate, independent-review, pr-gate, handoff | `task` matches **and** `state` equals the current fingerprint. |
 
 A result artifact whose state no longer matches is stale: **re-run the phase.**
 Never report a cached Validation Report or Security Gate Report as the current
 state of the code — the worktree changed since it was written.
+If HEAD is unknown, never reuse a context artifact. A branch switch, rebase, or
+new commit changes `head` and requires source-recon and planning again.
+Before reusing context, re-read cited source paths that are currently modified
+or no longer exist. If their evidence no longer matches the artifact, rerun
+source-recon and planning; do not trust the matching task and HEAD alone.
 
 On reuse, say so in one line (`plan: reusing .claude/flow/plan.md`) and move on.
 
-**Reset.** If `task` does not match the current goal, the directory belongs to a
-finished flow: delete `.claude/flow/` and start clean. Same on an explicit
-`/wise-flow reset`. Ask before deleting only if the recorded task is unrelated
-*and* newer than the last commit — that means another session is mid-flow.
+**Reset.** The flow owns exactly these artifacts: `source-recon.md`, `plan.md`,
+`implement-review.md`, `validate.md`, `security-gate.md`,
+`independent-review.md`, `pr-gate.md`, and
+`handoff.md` under `.claude/flow/`. Never delete the directory wholesale or
+remove an unrecognized file. On `/wise-flow reset`, remove only that exact
+manifest. If `task` does not match the current goal, ask before removing the old
+manifest because another session may still own it.
 
 ## Sequence
 
 1. source-recon
 2. plan
-3. If the work splits into non-overlapping write scopes, run `swarm`; otherwise
-   stay single-agent.
+3. Apply Authorization Invariants; otherwise stay single-agent.
 4. implement-review
 5. validate
 6. security-gate, if the change is security-sensitive
-7. pr-gate (`pr-self-review`)
-8. handoff, if the work is incomplete or continuation is requested
+7. independent-review, only if the user explicitly requested an external AI review
+8. pr-gate (`pr-self-review`)
+9. handoff, if the work is incomplete or continuation is requested
 
 ## Routing
 
@@ -121,7 +166,7 @@ route.
 | --- | --- |
 | `simple` | recon → plan (lightweight) → implement-review → validate → pr-gate |
 | `normal` | recon → plan → implement-review → validate → pr-gate |
-| `complex` | recon → plan → optional swarm → implement-review → validate → pr-gate |
+| `complex` | recon → plan → explicitly authorized swarm, if eligible → implement-review → validate → pr-gate |
 | `security-sensitive` | recon → plan → implement-review → validate → security-gate → pr-gate |
 | `review-only` | pr-gate, or security-gate if security-focused |
 | `handoff` | handoff |

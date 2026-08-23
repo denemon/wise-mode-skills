@@ -1,10 +1,11 @@
 ---
 name: pr-self-review
 description: >
-  PR作成前の「自分の変更差分のみ」を対象にしたセルフコードレビュー。
+  PR作成前の変更差分(引数で範囲指定、なければ現在のworktree全体)を対象にした
+  セルフコードレビュー。
   バグ・仕様破壊・考慮漏れの検出に特化し、抽象的な改善提案や大規模リファクタ
   の提案は行わない。GitHub PR にそのまま貼れる粒度の指摘を出力する。
-  Self code review on own diff before opening a PR. Bug-prevention focused,
+  Self code review of the diff before opening a PR. Bug-prevention focused,
   pragmatic, GitHub PR-comment-ready output. Use before creating a pull request,
   for "PR前レビュー", "セルフレビュー", "差分レビュー", or `/pr-self-review`.
   Also serves as the PR gate of /wise-flow — see "wise-flow PR ゲートとして使う場合".
@@ -15,13 +16,10 @@ allowed-tools:
   - Bash(git status)
   - Bash(git status *)
   - Bash(git diff)
-  - Bash(git diff *)
   - Bash(git log)
-  - Bash(git log *)
-  - Bash(git show *)
   - Bash(git merge-base *)
   - Bash(git rev-parse *)
-  - Bash(git branch *)
+  - Bash(git ls-files *)
   - Bash(gh pr view *)
   - Bash(gh pr diff *)
 ---
@@ -39,7 +37,13 @@ allowed-tools:
 
 ## レビュー対象(厳格)
 
-**自分の変更差分のみ。**
+**取得した diff のみ。**
+
+git には「どの変更が自分のものか」を判定する情報がない。引数なしの HEAD
+ルートが対象にするのは base 以降の全変更 + staged / unstaged + 未追跡
+ファイル、つまり **現在の worktree 全体** である。レビューしたくない変更が
+worktree に混ざっている場合は、ブランチ名 / PR 番号 / コミット範囲を明示して
+範囲を固定すること。
 
 - ルート判定 / base 決定 / diff 取得・規模確認 は `references/diff-acquisition.md` の
   1-A / 1-B / 1-C を順に行う
@@ -47,6 +51,12 @@ allowed-tools:
   - PR番号は `#` を取り除いた数値のみを `gh pr diff <num>` に渡す(例: `#123` → `123`)
 - 取得した diff の **追加行・変更行・削除行とその直近コンテキスト** が対象
 - 差分外のファイルや既存コード全体は **レビュー対象外**
+
+**権限モデル**: 引数付きの `git diff` / `git log` / `git show` は事前承認しない。
+`--output` / `--ext-diff` が diff を書き込み/実行プリミティブに変え、prefix-match
+の `allowed-tools` はフラグを検査できないため(attack-on-hacker と同じ基準)。
+`git diff "$BASE_REF"` などの ranged 形は毎回の権限プロンプトを想定して進める —
+read-only レビューであることの境界は、そのプロンプトである。
 - 唯一の例外: 観点6(既存仕様破壊)の判定に必要な **呼び出し元** のみ、
   Phase 2-B の手順と上限に従って読んでよい。読んだ結果は観点6 以外には使わない
 

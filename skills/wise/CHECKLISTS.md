@@ -5,7 +5,7 @@
 - [ ] Searched for project guidance docs (CLAUDE.md, CONTRIBUTING.md, README.md, etc.)
 - [ ] Read relevant project documentation
 - [ ] Assessed complexity (simple → lightweight / medium / complex → full process)
-- [ ] Created/found GitHub issue (for medium+ tasks)
+- [ ] Created/found GitHub issue (only if the user explicitly requested it)
 - [ ] Created todo list with phases
 - [ ] Verified all methods/APIs exist via grep — no assumptions
 - [ ] Identified codebase patterns to follow
@@ -69,9 +69,10 @@ Before committing, ask yourself:
 If during implementation you realize the design is wrong:
 
 1. Stop coding immediately
-2. `git stash` the in-progress work
+2. Keep the worktree intact; do not stash unrelated user changes
 3. Return to Phase 2 (Codebase Exploration)
-4. Update todo list and GitHub issue with revised scope
+4. Update the todo list and, only if issue tracking was explicitly requested,
+   the GitHub issue with revised scope
 5. Resume from Phase 3 with corrected tests
 
 ## Test Strategy Quick Reference
@@ -86,6 +87,10 @@ If during implementation you realize the design is wrong:
 | Auth / security | Full affected modules |
 
 ## GitHub Issue Commands
+
+Run these only when the user explicitly requests the corresponding GitHub
+issue action. Do not create, edit, comment on, label, or close an issue merely
+because wise mode is active.
 
 ```bash
 # List issues

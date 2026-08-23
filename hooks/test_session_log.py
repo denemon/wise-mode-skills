@@ -187,48 +187,29 @@ class TestSafeJsonLoads(unittest.TestCase):
         self.assertEqual(mod._safe_json_loads('"str"'), {})
 
 
-class TestLoadSessionMap(unittest.TestCase):
-    def test_nonexistent_file_returns_empty(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            self.assertEqual(
-                mod._load_session_map(Path(tmpdir) / "missing"), {}
-            )
+class TestLogFilePath(unittest.TestCase):
+    """ファイル名はセッション ID だけの純関数 — 共有状態を参照しない"""
 
-    def test_valid_lines(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "sessions"
-            path.write_text("s1=/log/a.md\ns2=/log/b.md\n", encoding="utf-8")
-            self.assertEqual(
-                mod._load_session_map(path),
-                {"s1": "/log/a.md", "s2": "/log/b.md"},
-            )
+    def test_same_session_id_always_maps_to_the_same_file(self):
+        log_dir = Path("/log")
+        self.assertEqual(
+            mod._log_file_path(log_dir, "sess-a"),
+            mod._log_file_path(log_dir, "sess-a"),
+        )
 
-    def test_skips_malformed_lines(self):
-        """`=` を含まない行、key/value が空の行はスキップ"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "sessions"
-            path.write_text(
-                "valid=/log/a.md\n"
-                "no_equal_sign\n"
-                "=missing_key\n"
-                "missing_value=\n"
-                "\n"
-                "another=/log/b.md\n",
-                encoding="utf-8",
-            )
-            self.assertEqual(
-                mod._load_session_map(path),
-                {"valid": "/log/a.md", "another": "/log/b.md"},
-            )
+    def test_distinct_session_ids_map_to_distinct_files(self):
+        log_dir = Path("/log")
+        self.assertNotEqual(
+            mod._log_file_path(log_dir, "sess-a"),
+            mod._log_file_path(log_dir, "sess-b"),
+        )
 
-    def test_value_with_equals_sign_preserved(self):
-        """値に '=' が含まれても split(1) なので最初の '=' で分割"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "sessions"
-            path.write_text("s1=/path/with=eq.md\n", encoding="utf-8")
-            self.assertEqual(
-                mod._load_session_map(path), {"s1": "/path/with=eq.md"}
-            )
+    def test_session_id_never_reaches_the_filesystem_as_a_path(self):
+        # session_id は外部入力。ハッシュを経由せず名前に使うと
+        # "../../x" のような ID がログディレクトリの外を指す。
+        path = mod._log_file_path(Path("/log"), "../../etc/passwd")
+        self.assertEqual(path.parent, Path("/log"))
+        self.assertNotIn("..", path.name)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -263,18 +244,13 @@ class TestLocalLogging(_EnvIsolatedTestCase):
             self.assertIn("```bash\npytest\n```", content)
             self.assertIn("PASS", content)
 
-            session_map = Path(tmpdir) / ".claude" / "log" / ".sessions"
-            self.assertTrue(session_map.exists())
-            self.assertIn("session-1234567890", session_map.read_text(encoding="utf-8"))
-
-    def test_stop_reuses_same_file_even_if_session_map_is_missing(self):
+    def test_stop_reuses_same_file_without_any_registry(self):
+        # 解決はセッション ID の純関数。ディスク上の対応表もマーカースキャンも
+        # 経由しないので、別プロセスの Stop でも同じファイルに合流する。
         with tempfile.TemporaryDirectory() as tmpdir:
             payload = self._payload(tmpdir)
             first_log = mod.write_local_log(payload, "PostToolUse", now=FIXED_NOW)
             self.assertIsNotNone(first_log)
-
-            session_map = Path(tmpdir) / ".claude" / "log" / ".sessions"
-            session_map.unlink()
 
             stop_payload = {"session_id": payload["session_id"], "cwd": tmpdir}
             stop_log = mod.write_local_log(stop_payload, "Stop", now=FIXED_LATER)
@@ -282,12 +258,124 @@ class TestLocalLogging(_EnvIsolatedTestCase):
             self.assertEqual(first_log, stop_log)
             content = first_log.read_text(encoding="utf-8")
             self.assertIn("> Turn ended at 12:35:40", content)
+            # ヘッダは初回の 1 度だけ — 2 イベント目で二重に書かれていない。
+            self.assertEqual(content.count("# Claude Code Session Log"), 1)
 
     def test_missing_session_id_skips_local_log(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = mod.write_local_log({"cwd": tmpdir}, "PostToolUse", now=FIXED_NOW)
             self.assertIsNone(result)
             self.assertFalse((Path(tmpdir) / ".claude" / "log").exists())
+
+    def test_concurrent_sessions_do_not_lose_logs(self):
+        # 修正前の構造(exists() 後に作成 + .sessions の read-modify-write)は
+        # 40 並行セッションで 12 ファイルしか残らなかった。共有レジストリを
+        # 消した後は、同時開始した全セッションのログが残る。
+        import threading
+
+        session_count = 20
+        with tempfile.TemporaryDirectory() as tmpdir:
+            barrier = threading.Barrier(session_count)
+            results: list[Path | None] = [None] * session_count
+
+            def start_session(index: int) -> None:
+                payload = {
+                    "session_id": f"concurrent-{index}",
+                    "cwd": tmpdir,
+                    "tool_name": "Bash",
+                    "tool_input": {"command": f"echo {index}"},
+                    "tool_response": f"out-{index}",
+                }
+                barrier.wait()
+                results[index] = mod.write_local_log(
+                    payload, "PostToolUse", now=FIXED_NOW)
+
+            threads = [threading.Thread(target=start_session, args=(i,))
+                       for i in range(session_count)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            log_files = list((Path(tmpdir) / ".claude" / "log").glob("*.md"))
+            self.assertEqual(len(log_files), session_count)
+            for index in range(session_count):
+                self.assertIsNotNone(results[index])
+                content = results[index].read_text(encoding="utf-8")
+                self.assertIn(f"**Session:** concurrent-{index}", content)
+                self.assertIn(f"echo {index}", content)
+
+    def test_concurrent_large_entries_do_not_interleave(self):
+        # バッファ付き open("a") はエントリが 8KB を超えると複数 write に
+        # 分割され、並行イベント間でエントリの内部が交錯した。
+        # 1 エントリ = 1 回の os.write なら各ペイロードは連続のまま残る。
+        import threading
+
+        thread_count = 3
+        payloads = {
+            index: f"BIG{index}-" + (f"x{index}" * 30000)
+            for index in range(thread_count)
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            barrier = threading.Barrier(thread_count)
+
+            def write_event(index: int) -> None:
+                payload = {
+                    "session_id": "large-session",
+                    "cwd": tmpdir,
+                    "tool_name": "Bash",
+                    "tool_input": {"command": payloads[index]},
+                    "tool_response": "",
+                }
+                barrier.wait()
+                mod.write_local_log(payload, "PostToolUse", now=FIXED_NOW)
+
+            threads = [threading.Thread(target=write_event, args=(i,))
+                       for i in range(thread_count)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            log_files = list((Path(tmpdir) / ".claude" / "log").glob("*.md"))
+            self.assertEqual(len(log_files), 1)
+            content = log_files[0].read_text(encoding="utf-8")
+            for index in range(thread_count):
+                with self.subTest(entry=index):
+                    self.assertIn(payloads[index], content,
+                                  "エントリが分割・交錯している")
+
+    def test_concurrent_events_of_one_session_share_one_file(self):
+        import threading
+
+        event_count = 10
+        with tempfile.TemporaryDirectory() as tmpdir:
+            barrier = threading.Barrier(event_count)
+
+            def write_event(index: int) -> None:
+                payload = {
+                    "session_id": "shared-session",
+                    "cwd": tmpdir,
+                    "tool_name": "Bash",
+                    "tool_input": {"command": f"step {index}"},
+                    "tool_response": "",
+                }
+                barrier.wait()
+                mod.write_local_log(payload, "PostToolUse", now=FIXED_NOW)
+
+            threads = [threading.Thread(target=write_event, args=(i,))
+                       for i in range(event_count)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            log_files = list((Path(tmpdir) / ".claude" / "log").glob("*.md"))
+            self.assertEqual(len(log_files), 1)
+            content = log_files[0].read_text(encoding="utf-8")
+            self.assertEqual(content.count("# Claude Code Session Log"), 1)
+            for index in range(event_count):
+                self.assertIn(f"step {index}", content)
 
 
 
@@ -308,7 +396,8 @@ class TestMain(_EnvIsolatedTestCase):
                     json.dumps(payload, ensure_ascii=False),
                 )
 
-            log_file = Path(tmpdir) / ".claude" / "log" / "2026-04-17_123456.md"
+            log_file = mod._log_file_path(
+                Path(tmpdir) / ".claude" / "log", "session-1234567890")
             self.assertTrue(log_file.exists())
             content = log_file.read_text(encoding="utf-8")
             self.assertIn("### [12:34] `Read` — `README.md`", content)

@@ -120,6 +120,44 @@ class GateDecisionTest(unittest.TestCase):
         self.assertEqual(state.get("attempts"), 1)
 
 
+class SourceFingerprintTest(unittest.TestCase):
+    """fingerprint は check.sh が実際に見るものを全部見ること
+
+    check.sh のテスト発見はファイルシステム走査なので、未追跡の test_*.py も
+    実行される。fingerprint が追跡ファイルしか見ないと「緑の記録後に未追跡
+    ファイルだけを壊した」状態で digest が変わらず、ゲートが検証をスキップして
+    緑のまま停止を許す。
+    """
+
+    def _repo(self, tmpdir: str) -> Path:
+        root = Path(tmpdir)
+        subprocess.run(["git", "init", "-q"], cwd=tmpdir, check=True)
+        (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "a.py"], cwd=tmpdir, check=True)
+        return root
+
+    def test_untracked_files_change_the_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._repo(tmpdir)
+            before = gate.source_fingerprint(root)
+            (root / "test_new.py").write_text("boom\n", encoding="utf-8")
+            after = gate.source_fingerprint(root)
+        self.assertIsNotNone(before)
+        self.assertNotEqual(before, after, "未追跡ファイルが fingerprint の盲点")
+
+    def test_ignored_files_do_not_change_the_fingerprint(self):
+        # .gitignore 対象まで数えると、ログや一時成果物が増えるたびに約 20 秒の
+        # 再検証が走る。--exclude-standard を外してはいけない。
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._repo(tmpdir)
+            (root / ".gitignore").write_text("*.log\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore"], cwd=tmpdir, check=True)
+            before = gate.source_fingerprint(root)
+            (root / "noise.log").write_text("x\n", encoding="utf-8")
+            after = gate.source_fingerprint(root)
+        self.assertEqual(before, after, "ignore 済みファイルで再検証が走る")
+
+
 class SurfaceNoticeTest(unittest.TestCase):
     """「テストは緑だが実際には一度も走らせていない」を 1 度だけ知らせる
 

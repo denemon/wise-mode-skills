@@ -171,7 +171,8 @@ Return an Evidence Pack:
 
 ### Next Route
 - classification: simple | normal | complex | security-sensitive | review-only
-- swarm candidate: yes/no and why
+- delegation_requested: yes/no, quoted or paraphrased from the user request
+- swarm candidate: yes only when delegation_requested is yes and write scopes do not overlap; otherwise no
 - security_gate_required: yes/no
 ```
 

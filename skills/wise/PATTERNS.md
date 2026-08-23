@@ -142,8 +142,8 @@ grep -rn "CONSTANT_NAME" src/
 # Review what you're about to commit
 git diff --staged
 
-# Review full branch diff against main
-git diff main...HEAD
+# Review the full branch and worktree against its resolved base
+/pr-self-review
 ```
 
 ---

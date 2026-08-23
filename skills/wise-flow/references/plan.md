@@ -29,7 +29,7 @@ Do not move to implementation until the plan states:
 - test/validation strategy
 - risk gates, including whether security review is required
 - rollback or compatibility concerns
-- swarm decision and write-scope boundaries if parallel work is proposed
+- delegation_requested from the Evidence Pack and the resulting swarm decision
 
 ## Steps
 
@@ -44,9 +44,9 @@ Do not move to implementation until the plan states:
 3. List files likely to change and files that must not change.
 4. Define test strategy before editing.
 5. Identify rollback, concurrency, shared-state, API contract, and data risks.
-6. Decide whether `swarm` is useful:
-   - Use only when work has separable concerns and non-overlapping write scopes.
-   - Skip for tightly coupled refactors or small changes.
+6. Apply the parent skill's Authorization Invariants; do not infer delegation:
+   - If `delegation_requested` is not `yes`, set `swarm_candidate: no`.
+   - If it is `yes`, use swarm only for separable, non-overlapping write scopes.
 7. Define the smallest safe implementation slice.
 8. Identify test cases to add, update, or run.
 
@@ -60,6 +60,7 @@ Return an Implementation Plan:
 ### Classification
 - class:
 - security_gate_required:
+- delegation_requested:
 - swarm_candidate:
 
 ### Source-Backed Understanding

@@ -1,12 +1,16 @@
 # wise-mode
 
+English | [日本語](README.ja.md)
+
 **Make Claude Code follow a process.** Fewer changes written before the code was
 read, fewer fixes that miss the root cause, fewer problems found after the PR is
 open. A set of [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-skills and hooks — and the effect is measured from git history, not claimed
-([benchmarks/](benchmarks/)).
+skills and hooks. Skill invocation and mandated markers are checked with live
+evals (`./check.sh --evals`) — invocation-level checks, not output quality; a
+git-history heuristic tracks the long-horizon trend
+([benchmarks/](benchmarks/)) — a diagnostic, not proof.
 
-8 skills + 2 hooks. Continuous modes are **kept alive by a hook**, so they do not
+7 skills + 3 hooks. Continuous modes are **kept alive by a hook**, so they do not
 fade out as the conversation grows.
 
 ## Components
@@ -15,14 +19,14 @@ fade out as the conversation grows.
 |------|------|-------------|
 | **wise** | Skill (`/wise`) | Architect mode — systematic planning, TDD, adversarial self-review, and quality gates (single task) |
 | **wise-cont** | Skill (`/wise-cont`) | Continuous architect mode — activate once, stays on until `/wise-cont-off` (hook-backed) |
-| **wise-flow** | Skill (`/wise-flow`) | Source-first flow: recon → plan → implement → validate → security gate → PR gate → handoff, as phases of one skill. Artifacts persist in `.claude/flow/`; the gates delegate to `pr-self-review` and `attack-on-hacker` |
-| **dev-with-review** | Skill (`/dev-with-review`) | Implement + continuous self-review + independent AI review via a separate Claude instance |
+| **wise-flow** | Skill (`/wise-flow`) | Source-first flow: recon → plan → implement → validate → security gate → PR gate → handoff, as phases of one skill. Artifacts persist in `.claude/flow/`; the PR gate runs `pr-self-review`, the security gate applies the `attack-on-hacker` methodology reference |
 | **attack-on-hacker** | Skill (`/attack-on-hacker`) | Adversarial source-code security review — threat model, taint analysis (Source → Sink → Sanitizer), severity rubric, CWE/CVSS findings, Diff Mode for PRs |
-| **pr-self-review** | Skill (`/pr-self-review`) | Self-review of your own diff before opening a PR — bug-prevention focused, GitHub-pasteable output (in Japanese). Doubles as the PR gate of `/wise-flow` |
+| **pr-self-review** | Skill (`/pr-self-review`) | Self-review of the diff before opening a PR — bug-prevention focused, GitHub-pasteable output (in Japanese). Doubles as the PR gate of `/wise-flow` |
 | **swarm** | Skill (`/swarm`) | Low-token subagent orchestration — creates scoped agent briefs plus runnable swarm files |
 | **terse-mode** | Skill (`/terse-mode`) | Brevity mode — fewer words, same technical substance, with lite/full/ultra intensity levels (hook-backed) |
 | **mode_persistence** | Hook | Keeps `/wise-cont` and `/terse-mode` alive across turns, `/compact`, and session resume — without it the mode decays after a few turns |
-| **session_log** | Hook | Auto-records every Claude Code session to `.claude/log/` as Markdown. Secrets are masked before writing |
+| **session_log** | Hook (opt-in) | Records every Claude Code session to `.claude/log/` as Markdown. Secrets are masked before writing. Installed only with `--with-session-log` |
+| **flag_guard** | Hook | Blocks flag-level escapes in preapproved read-only commands (`rg --pre`, `git --output`, global `git -c`, scanner report flags) — the layer prefix-match `allowed-tools` rules cannot inspect |
 
 ## Quick install
 
@@ -30,12 +34,32 @@ Run this in your **project root** (where `.git/` lives):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/install.sh | bash
+
+# with the opt-in session-logging hook:
+curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/install.sh | bash -s -- --with-session-log
+
+# reproducible: pin the installer AND the snapshot to the same commit, and
+# verify the archive checksum. An installer taken from mutable main can
+# disagree with a pinned archive's manifest — take both from one ref.
+REF=<commit-sha>
+curl -fsSL "https://raw.githubusercontent.com/den-emon/wise-mode/${REF}/install.sh" \
+  | WISE_MODE_REF="${REF}" WISE_MODE_SHA256=<archive-sha256> bash
 ```
 
-This installs skills into `.claude/skills/`, both hooks into `.claude/hooks/`, and
-merges hook configuration into `.claude/settings.local.json`. Skills that were
-folded into other skills (the old `/wise-flow-*` family) are removed on install —
-left in place they keep firing and compete with the router.
+The installer downloads **one tar.gz snapshot** of the repository (not one file
+at a time from the mutable `main` branch, which could interleave with a push
+and produce a mixed-version tree), verifies the manifest and your existing
+`settings.local.json` **before placing anything**, stages the complete payload
+and swaps it in with one `mv` per skill/hook — so an interrupted install never
+leaves a half-copied skill — and writes the merged hook configuration into
+`.claude/settings.local.json` as the final step. A failure at any check aborts
+with nothing installed. Skills that were folded into other skills
+(`dev-with-review`, the old `/wise-flow-*` family) are removed on install
+after the same consent prompt that guards overwriting — left in place they
+keep firing and compete with the router.
+
+The `session_log` hook is **opt-in** (`--with-session-log`): it persists tool
+input and output to disk on every tool call, which not every project wants.
 
 Mode flags live in `.claude/.wise-mode` and `.claude/.terse-mode`. If your
 repository commits `.claude/`, add both to `.gitignore` — otherwise the mode you
@@ -58,30 +82,23 @@ mkdir -p .claude/skills/wise-cont
 curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/wise-cont/SKILL.md \
   -o .claude/skills/wise-cont/SKILL.md
 
-# wise-flow (router + phase reference files)
-mkdir -p .claude/skills/wise-flow/references
+# wise-flow (router + phase reference files + independent-review script)
+mkdir -p .claude/skills/wise-flow/references .claude/skills/wise-flow/scripts
 curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/wise-flow/SKILL.md \
   -o .claude/skills/wise-flow/SKILL.md
-for phase in source-recon plan implement-review validate security-gate handoff; do
+for phase in source-recon plan implement-review validate security-gate independent-review reviewer_prompt handoff; do
   curl -fsSL "https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/wise-flow/references/${phase}.md" \
     -o ".claude/skills/wise-flow/references/${phase}.md"
 done
-
-# dev-with-review
-mkdir -p .claude/skills/dev-with-review/scripts .claude/skills/dev-with-review/references
-curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/dev-with-review/SKILL.md \
-  -o .claude/skills/dev-with-review/SKILL.md
-curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/dev-with-review/scripts/ai_review.sh \
-  -o .claude/skills/dev-with-review/scripts/ai_review.sh
-curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/dev-with-review/references/reviewer_prompt.md \
-  -o .claude/skills/dev-with-review/references/reviewer_prompt.md
-chmod +x .claude/skills/dev-with-review/scripts/ai_review.sh
+curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/wise-flow/scripts/ai_review.sh \
+  -o .claude/skills/wise-flow/scripts/ai_review.sh
+chmod +x .claude/skills/wise-flow/scripts/ai_review.sh
 
 # attack-on-hacker
 mkdir -p .claude/skills/attack-on-hacker/references
 curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/attack-on-hacker/SKILL.md \
   -o .claude/skills/attack-on-hacker/SKILL.md
-for ref in diff-mode quick-wins language-hints report-format; do
+for ref in methodology diff-mode quick-wins language-hints report-format; do
   curl -fsSL "https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/attack-on-hacker/references/${ref}.md" \
     -o ".claude/skills/attack-on-hacker/references/${ref}.md"
 done
@@ -96,21 +113,27 @@ for ref in diff-acquisition output-format; do
 done
 
 # swarm
-mkdir -p .claude/skills/swarm
+mkdir -p .claude/skills/swarm/references
 curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/swarm/SKILL.md \
   -o .claude/skills/swarm/SKILL.md
+curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/swarm/references/methodology.md \
+  -o .claude/skills/swarm/references/methodology.md
 
 # terse-mode
 mkdir -p .claude/skills/terse-mode
 curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/skills/terse-mode/SKILL.md \
   -o .claude/skills/terse-mode/SKILL.md
 
-# hooks
+# hooks (default set)
 mkdir -p .claude/hooks
-curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/hooks/session_log.py \
-  -o .claude/hooks/session_log.py
 curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/hooks/mode_persistence.py \
   -o .claude/hooks/mode_persistence.py
+curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/hooks/flag_guard.py \
+  -o .claude/hooks/flag_guard.py
+
+# session_log hook — opt-in only (it writes tool output to disk)
+curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/hooks/session_log.py \
+  -o .claude/hooks/session_log.py
 ```
 
 Then add the hook configuration to `.claude/settings.local.json`:
@@ -141,6 +164,28 @@ Then add the hook configuration to `.claude/settings.local.json`:
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/flag_guard.py\" PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+If you opted into the `session_log` hook, additionally merge these events into
+the same `"hooks"` object:
+
+```json
+{
+  "hooks": {
     "PostToolUse": [
       {
         "matcher": "",
@@ -192,9 +237,9 @@ When you type `/wise` in Claude Code, the agent shifts into architect mode for a
 | 3. **TDD** | Writes failing tests first, then minimal implementation, then refactors |
 | 4. **Implementation** | Builds following existing patterns — constants, logging, error handling |
 | 5. **Test Verification** | Runs the appropriate test suite, fixes regressions |
-| 6. **Documentation** | Updates docs and GitHub issues |
+| 6. **Documentation** | Updates docs and an explicitly requested GitHub issue |
 | 7. **Pre-Commit Review** | Adversarial self-review checklist |
-| 8. **PR Readiness** | Self-reviews the diff, opens a clean PR |
+| 8. **PR Readiness** | Self-reviews the diff; opens a PR only on explicit request |
 
 Simple changes (single file, < 50 lines, no interface changes) automatically skip the full ceremony — only phases 1, 4, and 7 run.
 
@@ -225,7 +270,7 @@ The agent assesses each request and applies the appropriate level:
 | Question / discussion (no code changes) | Q&A — architect thinking principles only |
 | Single file, < 50 lines, low risk | Lightweight — phases 1, 4, 7 |
 | Multi-file, clear scope | Full — phases 1–8 |
-| Complex (4+ files, schema changes, etc.) | Full + GitHub issue required |
+| Complex (4+ files, schema changes, etc.) | Full; issue only on explicit request |
 
 Deactivate with `/wise-cont-off` or "normal mode".
 
@@ -246,14 +291,21 @@ anymore — `install.sh` deletes the old ones.
 | plan | `references/plan.md` | Implementation Plan | `.claude/flow/plan.md` |
 | implement-review | `references/implement-review.md` | Change Pack | `.claude/flow/implement-review.md` |
 | validate | `references/validate.md` | Validation Report | `.claude/flow/validate.md` |
-| security-gate | `references/security-gate.md` → runs `attack-on-hacker` | Security Gate Report | `.claude/flow/security-gate.md` |
+| security-gate | `references/security-gate.md` → applies the `attack-on-hacker` methodology | Security Gate Report | `.claude/flow/security-gate.md` |
+| independent-review | `references/independent-review.md` → runs `scripts/ai_review.sh` | Independent Review Report | `.claude/flow/independent-review.md` |
 | pr-gate | the `pr-self-review` skill | PR Readiness Report | `.claude/flow/pr-gate.md` |
 | handoff | `references/handoff.md` | Handoff Note | `.claude/flow/handoff.md` |
 
 Both gates delegate rather than re-deriving their own method: the PR gate runs
-`pr-self-review`, and the security gate runs `attack-on-hacker` in Diff Mode and
-carries its severity rubric and evidence levels through verbatim. One security
-standard, not two.
+`pr-self-review`, and the security gate reads
+`attack-on-hacker/references/methodology.md` in Diff Mode and carries its
+severity rubric and evidence levels through verbatim. One security standard,
+not two. The methodology lives in a side-effect-free reference (not the
+skill's `SKILL.md`) because `attack-on-hacker` is user-invocation-only and its
+`allowed-tools` preapprovals must never activate outside `/attack-on-hacker`.
+The complex route treats `swarm` the same way: with an explicit delegation
+request, wise-flow reads `swarm/references/methodology.md` instead of invoking
+the skill.
 
 ### Artifacts persist
 
@@ -293,8 +345,9 @@ Use the optional branches only when they fit:
 | Situation | Route |
 |-----------|-------|
 | Small or normal code change | `source-recon -> plan -> implement-review -> validate -> pr-gate` |
-| Large change with separable write scopes | `source-recon -> plan -> swarm -> implement-review -> validate -> pr-gate` |
+| Explicit delegation request with separable write scopes | `source-recon -> plan -> swarm -> implement-review -> validate -> pr-gate` |
 | Security-sensitive change | `source-recon -> plan -> implement-review -> validate -> security-gate -> pr-gate` |
+| Explicit request for an external AI review | `... -> validate -> independent-review -> pr-gate` |
 | Existing diff review only | `pr-gate` |
 | Incomplete work or session transfer | `handoff` |
 
@@ -314,51 +367,32 @@ If a phase cannot produce its artifact, the flow stops and explains the blocking
 ```
 
 Use it when you want the complete code-development path, not just one phase.
+The PR gate reports readiness; it does not create, push, or open a PR unless you
+explicitly request the corresponding action.
 
-## dev-with-review — Implement + Independent Review
+### Independent review (optional gate)
 
-When you type `/dev-with-review`, the agent implements your task while continuously reviewing its own diffs. At the final gate, it invokes a **separate Claude instance** (`claude -p`) for an independent code review — free from development-context bias.
+When you explicitly ask for an external AI review, the flow runs
+`references/independent-review.md`: it invokes a **separate Claude instance**
+(`claude -p`) via `scripts/ai_review.sh` — a reviewer that receives none of the
+session's context or configuration, only the diff. The script returns a JSON
+score + findings on stdout, or a JSON error on stderr with a non-zero exit.
 
-```
-/dev-with-review add input validation to the signup form
-```
+The gate calls the script rather than assembling the `claude -p` command
+itself, so oversized-diff rejection, system-prompt extraction, and response
+parsing have one implementation. Oversized diffs use complete file or hunk
+chunks with a coverage manifest; a partial review never passes the gate. Other
+failures are reported, never worked around with an improvised second attempt.
 
-| Phase | What happens |
-|-------|-------------|
-| 1. **Understand** | Restate task, identify files, risks, and validation strategy |
-| 2. **Implement** | Small batches of changes |
-| 3. **Self-review loop** | After each batch: `git diff`, adversarial review, fix issues |
-| 4. **Validation** | Run lint, tests, typecheck (auto-detected per language) |
-| 5. **Independent review** | Run `scripts/ai_review.sh` — it invokes `claude -p` with the reviewer prompt and returns JSON score + findings on stdout, or a JSON error on stderr with a non-zero exit |
-| 6. **Final report** | Structured summary with score, findings, and remaining risks |
+The reviewer scores the diff 0–100 and returns findings by severity
+(critical/high/medium/low/info). Critical and high findings loop back through
+implement-review → validate, and the final diff must pass a re-run of this
+gate. Sending a diff to the external reviewer always goes through a per-run
+Bash permission prompt showing the exact `--diff-file` — wise-flow preapproves
+nothing, and the gate never runs unless you asked for it.
 
-The skill calls the script rather than assembling the `claude -p` command itself,
-so diff truncation, system-prompt extraction, and response parsing have one
-implementation. A failure at the gate is reported, never worked around with an
-improvised second attempt.
-
-The independent reviewer scores the diff 0–100 and returns findings by severity (critical/high/medium/low/info). Critical and high findings must be fixed before completion.
-
-### Skill files
-
-| File | Purpose |
-|------|---------|
-| `SKILL.md` | Core skill definition — phases, rules, and behavioral constraints |
-| `scripts/ai_review.sh` | Runs the Phase 5 `claude -p` review. The skill invokes this rather than assembling the call itself, and it works standalone too |
-| `references/reviewer_prompt.md` | System prompt for the independent reviewer instance |
-
-### When to use dev-with-review vs wise
-
-| Situation | Recommended |
-|-----------|-------------|
-| Emphasis on **planning, TDD, and architecture** — new features, multi-file refactors, schema changes | `/wise` or `/wise-cont` |
-| Emphasis on **implementation quality and review** — bug fixes, feature work where you want a second opinion | `/dev-with-review` |
-| Single task, full ceremony with GitHub issue tracking | `/wise` |
-| Session-wide architect standards | `/wise-cont` |
-| Need an independent, bias-free code review as a final gate | `/dev-with-review` |
-| Simple low-risk change (single file, < 50 lines) | Either works — wise auto-scales to lightweight mode |
-
-**Key difference**: wise focuses on *how you think and plan* (architect-first, TDD, 8 phases). dev-with-review focuses on *how you verify* (continuous diff review + independent AI reviewer). They complement each other — wise ensures you build the right thing, dev-with-review ensures you built it correctly.
+This gate replaced the retired `dev-with-review` skill; `install.sh` removes
+old `dev-with-review` installs on upgrade.
 
 ## attack-on-hacker — Adversarial Security Review
 
@@ -389,11 +423,46 @@ When you type `/attack-on-hacker`, the agent reviews authorized source code from
 - **Diff Mode** — `[regression]` / `[new-surface]` / `[pre-existing]` classification for PR reviews
 - **JSON output** — optional `--format=json` for tooling consumption
 
+### Permission model — known limits
+
+`allowed-tools` entries are prefix rules: they match the start of a command and
+cannot inspect flags. Two layers compensate:
+
+1. The preapproved list is pinned to read-only forms and deliberately excludes
+   commands whose flags escalate them into write or execute primitives: `rg`
+   (`--pre <cmd>` runs a command per file) and the report-writing scanners
+   (`gosec`, `trufflehog`, `gitleaks`, `checkov`, `tfsec`, `bandit`) are not
+   preapproved at all and go through the normal permission prompt. The ranged
+   `git diff *` / `git log *` / `bundle audit *` forms are gone too:
+   `--output` and `--ext-diff` write or execute, `bundle audit update`
+   mutates the advisory database, and `--out${GAP}put`-style expansion can
+   smuggle such flags past any string-level check — so only bare, flagless
+   forms are preapproved and ranged diffs prompt. The skill
+   itself is explicit-invocation only (`disable-model-invocation: true`), so
+   these permissions never activate without the user typing
+   `/attack-on-hacker`.
+2. The `flag_guard` PreToolUse hook (installed by `install.sh`) mechanically
+   blocks the known flag-level escapes even when they appear *after* a
+   preapproved prefix: `rg -n --pre <cmd>`, `git log --output=<path>`, global
+   `git -c key=value`, `git --exec-path`, and the report-output flags of the
+   audit scanners. It also rejects flag tokens containing `$`, a backtick, or
+   `{` — the guard sees the pre-expansion string, so an expandable flag can
+   never be verified as safe. The hook is defense in depth, not a permission
+   boundary: it fails open on internal errors, and hook timeouts do not
+   block, so nothing is preapproved that would be unsafe without it.
+
+The deny table is a known-vector list, not a proof. When reviewing untrusted or
+third-party code — exactly the input a security review sees — keep defense in
+depth: run the skill with Bash denied or inside a sandboxed checkout, and never
+review a downloaded tree that ships its own `.git` or `.claude` directory
+without discarding those first.
+
 ### Skill files
 
 | File | Purpose |
 |------|---------|
-| `SKILL.md` | Phases, threat model, taint vocabulary, sanity gate, severity rubric |
+| `SKILL.md` | Thin wrapper: permissions (active only on `/attack-on-hacker`) and the pointer to the methodology |
+| `references/methodology.md` | The method itself — phases, threat model, taint vocabulary, sanity gate, severity rubric. Side-effect-free; also read by the `/wise-flow` security gate |
 | `references/diff-mode.md` | PR/branch scoping, regression hunt, new-surface questions |
 | `references/quick-wins.md` | Secrets, CI/CD, container, IaC, and dependency checks |
 | `references/language-hints.md` | Stack-specific sinks (Node, Python, Java, Go, Rust, SQL) |
@@ -407,11 +476,11 @@ When you type `/attack-on-hacker`, the agent reviews authorized source code from
 | Security check on a PR / branch diff | `/attack-on-hacker review this PR` (auto-enters Diff Mode) |
 | Auth, authz, crypto, deserialization, or parser changes | `/attack-on-hacker` |
 | Dependency or IaC change | `/attack-on-hacker` (Quick-Wins Sweep covers both) |
-| Non-security implementation work | `/wise` or `/dev-with-review` |
+| Non-security implementation work | `/wise` or `/wise-flow` |
 
 ## pr-self-review — Self-Review Before the PR
 
-When you type `/pr-self-review`, the agent reviews **only your own diff** before you open a PR. It focuses on bug-prevention — not idealism, not large refactor proposals, not nitpicking — and outputs findings at a granularity you can paste straight into a GitHub PR comment. **The report is written in Japanese**; the skill definition documents both languages.
+When you type `/pr-self-review`, the agent reviews **the acquired diff** — an explicit branch / PR / commit range, or, with no arguments, the entire current worktree including untracked files — before you open a PR. It focuses on bug-prevention — not idealism, not large refactor proposals, not nitpicking — and outputs findings at a granularity you can paste straight into a GitHub PR comment. **The report is written in Japanese**; the skill definition documents both languages.
 
 ```
 /pr-self-review                # diff between current branch and base (origin/main → main → master)
@@ -468,9 +537,9 @@ security gate status are all known.
 
 | Situation | Recommended |
 |-----------|-------------|
-| Final check on your own diff right before pushing / opening a PR | `/pr-self-review` |
+| Final check on the diff right before pushing / opening a PR | `/pr-self-review` |
 | PR gate inside the source-first flow | `/wise-flow` — it calls this skill and asks for the PR Readiness Report |
-| Want a more independent review by a separate Claude instance | `/dev-with-review` (Phase 5) |
+| Want a more independent review by a separate Claude instance | `/wise-flow` (independent-review gate, on explicit request) |
 | Security-focused diff review | `/attack-on-hacker` (Diff Mode) |
 | Architect-mode design + TDD for the change itself | `/wise` |
 
@@ -526,9 +595,12 @@ decays after a few turns. `mode_persistence.py` fixes that at the harness level.
 - The two modes are independent — turning off terse leaves wise running
 - Failures are swallowed on purpose: a broken hook must never block a session
 
-## session_log — Session Logger (Hook)
+## session_log — Session Logger (Hook, opt-in)
 
-`session_log.py` records Claude Code tool usage to `.claude/log/` as Markdown files.
+`session_log.py` records Claude Code tool usage to `.claude/log/` as Markdown
+files. It is **not part of the default install**: it persists tool input and
+output to disk on every tool call, so it is installed only when you ask for it
+with `install.sh --with-session-log` (or by wiring it manually).
 
 ### How it works
 
@@ -563,7 +635,9 @@ decays after a few turns. `mode_persistence.py` fixes that at the harness level.
 
 ### Log format
 
-Logs are saved as `.claude/log/YYYY-MM-DD_HHMMSS.md`:
+Logs are saved as `.claude/log/session-<hash>.md` — the name is derived from the
+session ID alone, so concurrent sessions never race over a shared registry and a
+session spanning midnight stays in one file:
 
 ````markdown
 # Claude Code Session Log
@@ -607,8 +681,8 @@ src/utils.ts:10:export function handleError(e: Error) {
 ## Measuring whether it helps
 
 These skills *add* process. Without a number, "it feels more careful" is all you
-get — so there is exactly one metric: **fix-follow rate**, the share of commits
-that fix a file touched again shortly after it was last changed.
+get — so there is exactly one metric: **fix-follow rate**, the share of fix
+commits that re-touch a file changed shortly before.
 
 ```bash
 python3 benchmarks/fix_follow_rate.py --since 2026-01-01 --until 2026-04-01 --label before
@@ -616,9 +690,10 @@ python3 benchmarks/fix_follow_rate.py --since 2026-04-01 --until 2026-07-01 --la
 ```
 
 Measure one period before adopting wise-mode and an equally long one after, with
-at least 30 commits each. A gap under 5 points means no effect — it is inside the
-heuristic's error. Protocol, interpretation, and known limits are in
-[benchmarks/README.md](benchmarks/README.md).
+at least 30 commits **and 10 fix commits** each. One rework moves the rate by
+100 / fix-commits points (printed as `rate step`); a gap smaller than twice the
+larger of the two periods' steps means no effect. Protocol, interpretation, and known
+limits are in [benchmarks/README.md](benchmarks/README.md).
 
 ## Development
 
@@ -627,8 +702,9 @@ all three test suites:
 
 ```bash
 ./check.sh            # everything, ~22s
-./check.sh --fast     # skips the two slow integration suites, ~3s
+./check.sh --fast     # skips the slow integration suites, ~3s
 ./check.sh --mutants  # audits the guards themselves, ~2.5min
+./check.sh --evals    # runs real claude -p against the skills (billed) — on demand
 ```
 
 Each suite runs under a timeout. A hang here has always meant recursion — a test
@@ -670,7 +746,7 @@ It gives up after three consecutive failures and hands back to you, and it skips
 the run entirely when no tracked source file changed since the last green — so
 conversational turns cost nothing.
 
-The gate runs `check.sh --fast`; the two slow integration suites are CI's job.
+The gate runs `check.sh --fast`; the slow integration suites are CI's job.
 A run that times out is reported as *inconclusive*, never as green — otherwise
 one slow machine would cache a false pass and switch the gate off for good.
 
@@ -737,6 +813,7 @@ before running, so the suite can never make a billed API call.
 
 Re-run `install.sh`. It cleans up what earlier versions left behind:
 
+- the `dev-with-review` skill — retired; its external AI review is now the optional `independent-review` gate of `/wise-flow`, and the installer deletes `.claude/skills/dev-with-review`
 - the separate `/wise-flow-*` skills — now phases of `/wise-flow`, deleted from `.claude/skills/`
 - `hooks/wise_mode.py` — renamed to `mode_persistence.py`; the file and its stale `settings.local.json` entries are removed
 - hook `timeout` values written as milliseconds (`5000`) — they mean seconds
@@ -750,8 +827,8 @@ them.
 
 ```bash
 # All components
-rm -rf .claude/skills/{wise,wise-cont,wise-flow,dev-with-review,attack-on-hacker,pr-self-review,swarm,terse-mode}
-rm -f .claude/hooks/session_log.py .claude/hooks/mode_persistence.py
+rm -rf .claude/skills/{wise,wise-cont,wise-flow,attack-on-hacker,pr-self-review,swarm,terse-mode}
+rm -f .claude/hooks/session_log.py .claude/hooks/mode_persistence.py .claude/hooks/flag_guard.py
 rm -f .claude/.wise-mode .claude/.terse-mode
 rm -rf .claude/flow          # wise-flow phase artifacts
 rm -rf .claude/log           # session logs (masked, but still sensitive)

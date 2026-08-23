@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from fix_follow_rate import DAY, analyze, parse_log
+from fix_follow_rate import (
+    DAY, MIN_COMMITS, MIN_FIX_COMMITS, analyze, log_command, parse_log,
+    sample_warning,
+)
 
 T0 = 1_700_000_000
 
@@ -21,7 +24,40 @@ class AnalyzeTest(unittest.TestCase):
             commit("b", 3, "fix: null total in checkout", ["pay.py"]),
         ])
         self.assertEqual(result["rework_commits"], 1)
-        self.assertEqual(result["rate"], 0.5)
+        # 母数は fix コミット(1 件中 1 件が再修正)。全コミット割りではない。
+        self.assertEqual(result["rate"], 1.0)
+
+    def test_unrelated_feature_commits_do_not_dilute_the_rate(self):
+        # レビューで実証された操作: 再修正 1 件のまま feature を 8 件足すと
+        # 全コミット割りでは 50% → 10% に「改善」する。母数を fix に固定して
+        # この操作を無効化する。
+        base = [
+            commit("a", 0, "feat: add checkout", ["pay.py"]),
+            commit("b", 3, "fix: null total in checkout", ["pay.py"]),
+        ]
+        padding = [
+            commit(f"p{i}", 30 + i, "feat: unrelated work", [f"other{i}.py"])
+            for i in range(8)
+        ]
+        self.assertEqual(analyze(base)["rate"], analyze(base + padding)["rate"])
+
+    def test_no_fix_commits_means_no_rate(self):
+        # fix 0 件で 0.0 を返すと「最良値」に見える。率は存在しない = None。
+        result = analyze([commit("a", 0, "feat: x", ["a.py"])])
+        self.assertIsNone(result["rate"])
+
+    def test_pre_window_history_seeds_last_touch(self):
+        # 反例: 測定開始 1 日前に触られ、1 日後に修正された同じファイルが、
+        # 先行履歴なしでは 0%、含めると 100% になった。seed は last_touch
+        # にだけ効き、件数には入らない。
+        result = analyze([
+            commit("a", -1, "feat: x", ["pay.py"]),
+            commit("b", 1, "fix: x", ["pay.py"]),
+        ], measure_from_ts=T0)
+        self.assertEqual(result["commits"], 1)
+        self.assertEqual(result["fix_commits"], 1)
+        self.assertEqual(result["rework_commits"], 1)
+        self.assertEqual(result["rate"], 1.0)
 
     def test_fix_outside_window_is_not_rework(self):
         result = analyze([
@@ -55,7 +91,42 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(result["rework_commits"], 0)
 
     def test_empty_history(self):
-        self.assertEqual(analyze([])["rate"], 0.0)
+        self.assertIsNone(analyze([])["rate"])
+
+    def test_same_second_commits_follow_input_history_order(self):
+        # 反例: git log は newest-first で、timestamp の安定ソートはその順序を
+        # 保存する。同一秒の feat→fix が fix→feat のまま処理され、同じ 2
+        # コミットで入力順を変えるだけで 0%↔100% が反転した。analyze は
+        # 並べ替えず、git log --reverse の履歴順をそのまま信頼する。
+        pair = [
+            commit("a", 0, "feat: x", ["pay.py"]),
+            commit("b", 0, "fix: x", ["pay.py"]),
+        ]
+        self.assertEqual(analyze(pair)["rework_commits"], 1)
+        self.assertEqual(analyze(list(reversed(pair)))["rework_commits"], 0)
+
+    def test_log_command_requests_history_order(self):
+        self.assertIn("--reverse", log_command("2026-01-01", None, "."))
+
+
+class SampleWarningTest(unittest.TestCase):
+    def test_thin_fix_denominator_warns_even_with_many_commits(self):
+        # 反例: 「31 commits / 1 fix」が無警告だった。率の母数は fix なので、
+        # 総コミット数だけ見ても標本の薄さは分からない。
+        warning = sample_warning({"commits": 31, "fix_commits": 1})
+        self.assertIn("警告", warning)
+        self.assertIn("fix", warning)
+
+    def test_zero_fixes_warns_as_not_measurable(self):
+        self.assertIn("N/A", sample_warning({"commits": 31, "fix_commits": 0}))
+
+    def test_few_total_commits_warns(self):
+        self.assertIn("警告", sample_warning(
+            {"commits": MIN_COMMITS - 1, "fix_commits": MIN_FIX_COMMITS}))
+
+    def test_sufficient_sample_is_silent(self):
+        self.assertEqual(sample_warning(
+            {"commits": MIN_COMMITS, "fix_commits": MIN_FIX_COMMITS}), "")
 
 
 class ParseLogTest(unittest.TestCase):

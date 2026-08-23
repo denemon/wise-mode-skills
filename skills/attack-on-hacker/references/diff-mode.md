@@ -4,19 +4,32 @@ If `Task: $ARGUMENTS` indicates a diff or PR review (e.g. "Review PR #123", "Aud
 
 ### Collect the diff
 
-- Against a base branch: `git diff <base>...HEAD` (three-dot — diff against the merge base, not the tip)
-- Local uncommitted changes: `git diff` / `git diff --staged`
+- Against an explicit branch: follow the `pr-self-review` branch route using
+  `TARGET_REF`, including its merge-base selection. Do not substitute the
+  currently checked-out `HEAD` for the requested target.
+- Local uncommitted changes: follow the HEAD route in the `pr-self-review`
+  skill's `references/diff-acquisition.md`. It combines `git diff "$BASE_REF"`
+  with `git ls-files --others --exclude-standard` and appends each untracked
+  file using `git diff --no-index -- /dev/null "$path"`.
 - GitHub PR (if `gh` is authorized in the environment): `gh pr diff <pr-number>`
 
-If the diff exceeds ~2000 lines, ask the requester to narrow scope or focus on the highest-risk files (auth, crypto, deserialization, parsing, file handling, IaC, CI configs). State the truncation explicitly in the report.
+After collection, use that same acquired diff for every phase below. Do not run
+a new base-to-`HEAD` diff: that changes the target for an explicit branch and
+drops staged, unstaged, and untracked changes from a local review.
+
+If the diff exceeds ~2000 lines, ask the requester to choose a complete full
+review, complete file/hunk chunks, or an explicitly partial high-risk review.
+Record `coverage: complete|partial` plus every unreviewed file or hunk. A partial
+review may inform triage but must never satisfy a security or PR gate.
 
 ### Phase adjustments under Diff Mode
 
 - **Phase 1 (Scope)** — list only the entry points / trust boundaries the diff touches or could reach. Re-check the attacker profile: a small change can move the code into a new trust zone (e.g. an internal-only handler exposed via a new public route).
-- **Phase 1.5 (Quick-Wins)** — restrict the Sweep to changed files. Additionally run:
-  - `git diff <base>...HEAD -- '*.env*' '*.pem' '*.key' '*.p12'` — accidentally added secrets.
-  - `git diff <base>...HEAD -- '.github/workflows/' '.gitlab-ci.yml' '.circleci/'` — a single CI tweak can introduce full repo-secret exfiltration.
-  - `git diff <base>...HEAD -- 'Dockerfile' '*.tf' '*.yaml' '*.yml'` — IaC / container regressions.
+- **Phase 1.5 (Quick-Wins)** — restrict the Sweep to changed files in the
+  acquired diff. Inspect its sections for:
+  - `*.env*`, `*.pem`, `*.key`, `*.p12` — accidentally added secrets.
+  - `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/` — a single CI tweak can introduce full repo-secret exfiltration.
+  - `Dockerfile`, `*.tf`, `*.yaml`, `*.yml` — IaC / container regressions.
 - **Phase 2 (Attacker Map)** — only build flows for sources the diff introduces or sinks the diff modifies.
 - **Phase 3 (Hunt)** — focus on the high-risk classes that match what the diff touches. Skip hunt categories the diff cannot affect.
 
@@ -36,9 +49,9 @@ Diff reviews surface a class of bugs that whole-repo reviews miss: **silently we
 
 Useful starting filter (read context, not just the regex hits):
 
-```bash
-git diff <base>...HEAD | rg -i "^-.*(@login_required|@csrf_exempt|@PreAuthorize|verify=False|InsecureSkipVerify|permitAll|AllowAll|bcrypt|argon2|csrf|cors|TLS|HTTPS)"
-```
+Search the deletions in the same acquired diff for
+`@login_required|@csrf_exempt|@PreAuthorize|verify=False|InsecureSkipVerify|permitAll|AllowAll|bcrypt|argon2|csrf|cors|TLS|HTTPS`,
+then read their diff context rather than matching a newly reconstructed range.
 
 ### New attack surface introduced by the diff
 
@@ -48,7 +61,10 @@ For every additive change, ask:
 - New external callers / fetchers — SSRF surface, retry / timeout / host-allowlist policy?
 - New file I/O — path traversal, symlink-follow, archive extraction?
 - New deserializers / parsers — what input shape do they trust?
-- New dependencies — `git diff <base>...HEAD -- 'package.json' 'package-lock.json' 'pyproject.toml' 'poetry.lock' 'Cargo.toml' 'go.mod'` then audit only the **newly added** packages (maintainer, downloads, typosquat similarity).
+- New dependencies — inspect the acquired diff sections for `package.json`,
+  `package-lock.json`, `pyproject.toml`, `poetry.lock`, `Cargo.toml`, and
+  `go.mod`, then audit only the **newly added** packages (maintainer, downloads,
+  typosquat similarity).
 
 ### Diff-Mode finding classification
 

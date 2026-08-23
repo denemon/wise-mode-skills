@@ -2,7 +2,14 @@
 # install.sh — Installer for wise-mode Claude Code skills and hooks
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/install.sh | bash
-#   wget -qO- https://raw.githubusercontent.com/den-emon/wise-mode/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/install.sh | bash -s -- --with-session-log
+#
+# Reproducible install: pin the INSTALLER and the snapshot to the same commit
+# (a mutable-main installer against a pinned archive can disagree with the
+# archive's manifest), plus optionally the archive checksum:
+#   REF=<commit-sha>
+#   curl -fsSL "https://raw.githubusercontent.com/den-emon/wise-mode/${REF}/install.sh" \
+#     | WISE_MODE_REF="${REF}" WISE_MODE_SHA256=<archive-sha256> bash
 #
 # The entire script is wrapped in main() so that a partial download
 # never executes incomplete code.
@@ -11,23 +18,29 @@ main() {
     set -euo pipefail
 
     # ── Configuration ──────────────────────────────────────────────
-    REPO_RAW_BASE="https://raw.githubusercontent.com/den-emon/wise-mode/main"
+    # Single-archive install: exactly one snapshot of the repository is
+    # downloaded as a tarball. Fetching files one by one from the mutable
+    # main branch could interleave with a push and produce a mixed-version
+    # tree; one archive cannot.
+    REPO_ARCHIVE_BASE="https://codeload.github.com/den-emon/wise-mode/tar.gz"
+    REPO_REF="${WISE_MODE_REF:-main}"
+    REPO_SHA256="${WISE_MODE_SHA256:-}"
 
     # Skills to install: "source_path|install_name|file1,file2,..."
     SKILLS=(
         "terse-mode|terse-mode|SKILL.md"
-        "swarm|swarm|SKILL.md"
+        "swarm|swarm|SKILL.md,references/methodology.md"
         "wise|wise|SKILL.md,CHECKLISTS.md,PATTERNS.md"
         "wise-cont|wise-cont|SKILL.md"
-        "wise-flow|wise-flow|SKILL.md,references/source-recon.md,references/plan.md,references/implement-review.md,references/validate.md,references/security-gate.md,references/handoff.md"
-        "dev-with-review|dev-with-review|SKILL.md,scripts/ai_review.sh,references/reviewer_prompt.md"
-        "attack-on-hacker|attack-on-hacker|SKILL.md,references/diff-mode.md,references/quick-wins.md,references/language-hints.md,references/report-format.md"
+        "wise-flow|wise-flow|SKILL.md,references/source-recon.md,references/plan.md,references/implement-review.md,references/validate.md,references/security-gate.md,references/independent-review.md,references/reviewer_prompt.md,references/handoff.md,scripts/ai_review.sh"
+        "attack-on-hacker|attack-on-hacker|SKILL.md,references/methodology.md,references/diff-mode.md,references/quick-wins.md,references/language-hints.md,references/report-format.md"
         "pr-self-review|pr-self-review|SKILL.md,references/diff-acquisition.md,references/output-format.md"
     )
 
     # Skills that used to be installed separately and are now phases of another
     # skill. Left in place they keep firing and compete with the new router.
     REMOVED_SKILLS=(
+        "dev-with-review"
         "wise-flow-source-recon"
         "wise-flow-plan"
         "wise-flow-implement-review"
@@ -37,11 +50,30 @@ main() {
         "wise-flow-handoff"
     )
 
-    # Hook files to install
+    # Hook files installed by default. session_log.py is a deliberate
+    # opt-in (--with-session-log): it persists tool input and output to
+    # disk on every tool call.
     HOOK_FILES=(
-        "session_log.py"
         "mode_persistence.py"
+        "flag_guard.py"
     )
+    SESSION_LOG_HOOK="session_log.py"
+
+    WITH_SESSION_LOG=0
+    for arg in "$@"; do
+        case "$arg" in
+            --with-session-log) WITH_SESSION_LOG=1 ;;
+            *)
+                printf '[error] unknown option: %s\n' "$arg" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    INSTALL_HOOKS=("${HOOK_FILES[@]}")
+    if [ "${WITH_SESSION_LOG}" -eq 1 ]; then
+        INSTALL_HOOKS+=("${SESSION_LOG_HOOK}")
+    fi
 
     # Hooks configuration to merge into settings.local.json.
     # shellcheck disable=SC2016  # $CLAUDE_PROJECT_DIR must reach the JSON literally;
@@ -70,6 +102,22 @@ main() {
                 ]
             }
         ],
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/flag_guard.py\" PreToolUse",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ]
+    }'
+
+    # shellcheck disable=SC2016  # same reason as HOOKS_CONFIG.
+    SESSION_LOG_HOOKS_CONFIG='{
         "PostToolUse": [
             {
                 "matcher": "",
@@ -127,6 +175,11 @@ main() {
         exit 1
     fi
 
+    if ! command -v tar >/dev/null 2>&1; then
+        error "tar is required to extract the release archive but was not found."
+        exit 1
+    fi
+
     # ── Detect project root ───────────────────────────────────────
     if [ -d ".git" ] || [ -d ".claude" ]; then
         PROJECT_ROOT="$(pwd)"
@@ -140,6 +193,38 @@ main() {
         esac
     fi
 
+    # ── Validate existing settings BEFORE anything is placed ──────
+    # Parsing the settings only after files were already copied is how a
+    # broken JSON once aborted the install and left 27 files behind. The
+    # structure check mirrors exactly what the merge step dereferences, so a
+    # hooks section of the wrong shape fails here with a clear message instead
+    # of as a traceback mid-merge.
+    SETTINGS_PATH="${PROJECT_ROOT}/.claude/settings.local.json"
+    if [ -f "${SETTINGS_PATH}" ]; then
+        if ! python3 -c "
+import json, sys
+settings = json.load(open(sys.argv[1]))
+hooks = settings.get('hooks', {})
+if not isinstance(hooks, dict):
+    raise SystemExit(1)
+for entries in hooks.values():
+    if not isinstance(entries, list):
+        raise SystemExit(1)
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise SystemExit(1)
+        if not isinstance(entry.get('hooks', []), list):
+            raise SystemExit(1)
+        for hook in entry.get('hooks', []):
+            if not isinstance(hook, dict):
+                raise SystemExit(1)
+" "${SETTINGS_PATH}" 2>/dev/null; then
+            error "Existing .claude/settings.local.json is not valid JSON, or its hooks section is malformed."
+            error "Fix or remove it first — nothing was installed."
+            exit 1
+        fi
+    fi
+
     # ── Check for existing installation ───────────────────────────
     EXISTING=0
     for skill_entry in "${SKILLS[@]}"; do
@@ -151,12 +236,26 @@ main() {
             break
         fi
     done
-    for hook_file in "${HOOK_FILES[@]}"; do
+    for hook_file in "${INSTALL_HOOKS[@]}"; do
         if [ -f "${PROJECT_ROOT}/.claude/hooks/${hook_file}" ]; then
             EXISTING=1
             break
         fi
     done
+
+    # Retired skills are deleted on upgrade, but never silently: route their
+    # presence into the same consent prompt as the overwrite, so nothing that
+    # exists in .claude/ is removed without a yes.
+    REMOVED_PRESENT=""
+    for removed in "${REMOVED_SKILLS[@]}"; do
+        if [ -f "${PROJECT_ROOT}/.claude/skills/${removed}/SKILL.md" ]; then
+            REMOVED_PRESENT="${REMOVED_PRESENT} ${removed}"
+        fi
+    done
+    if [ -n "${REMOVED_PRESENT}" ]; then
+        warn "Retired skills present; continuing will remove them:${REMOVED_PRESENT}"
+        EXISTING=1
+    fi
 
     if [ "${EXISTING}" -eq 1 ]; then
         warn "One or more skills/hooks already exist in .claude/"
@@ -168,125 +267,102 @@ main() {
         esac
     fi
 
-    # ── Download to temp dir first (atomic install) ───────────────
+    # ── Download ONE archive snapshot to a temp dir ───────────────
     TMPDIR_DOWNLOAD="$(mktemp -d)"
-    trap 'rm -rf "${TMPDIR_DOWNLOAD}"' EXIT
+    # Staging lives inside .claude/ so the final swap is a same-filesystem
+    # mv (rename), not a copy. A fixed name lets a rerun clean up leftovers
+    # from a killed install.
+    STAGING_DIR="${PROJECT_ROOT}/.claude/.install-staging"
+    trap 'rm -rf "${TMPDIR_DOWNLOAD}" "${STAGING_DIR}"' EXIT
 
+    ARCHIVE="${TMPDIR_DOWNLOAD}/wise-mode.tar.gz"
+    ARCHIVE_URL="${REPO_ARCHIVE_BASE}/${REPO_REF}"
+    info "Downloading snapshot ${REPO_REF}..."
+    if ! fetch "${ARCHIVE_URL}" > "${ARCHIVE}" 2>/dev/null || [ ! -s "${ARCHIVE}" ]; then
+        error "Failed to download ${ARCHIVE_URL}. Installation aborted."
+        exit 1
+    fi
+
+    if [ -n "${REPO_SHA256}" ]; then
+        if ! command -v shasum >/dev/null 2>&1; then
+            error "WISE_MODE_SHA256 is set but shasum was not found."
+            exit 1
+        fi
+        # LC_ALL=C: macOS の shasum(Perl)は LC_ALL=C.UTF-8 などの locale を
+        # 継承すると panic して終了 9 になる。checksum 計算に locale は不要。
+        ACTUAL_SHA256="$(LC_ALL=C shasum -a 256 "${ARCHIVE}" | cut -d' ' -f1)"
+        if [ "${ACTUAL_SHA256}" != "${REPO_SHA256}" ]; then
+            error "Archive checksum mismatch: expected ${REPO_SHA256}, got ${ACTUAL_SHA256}."
+            error "Installation aborted — nothing was installed."
+            exit 1
+        fi
+        ok "Archive checksum verified."
+    fi
+
+    EXTRACT_DIR="${TMPDIR_DOWNLOAD}/extracted"
+    mkdir -p "${EXTRACT_DIR}"
+    if ! tar -xzf "${ARCHIVE}" -C "${EXTRACT_DIR}" 2>/dev/null; then
+        error "Failed to extract the archive. Installation aborted."
+        exit 1
+    fi
+
+    SRC_DIR=""
+    for extracted_root in "${EXTRACT_DIR}"/*/; do
+        SRC_DIR="${extracted_root%/}"
+        break
+    done
+    if [ -z "${SRC_DIR}" ]; then
+        error "Archive extraction produced no directory. Installation aborted."
+        exit 1
+    fi
+
+    # ── Verify the snapshot against the manifest BEFORE placement ─
     FAIL=0
-    INSTALLED_FILES=()
-
-    # Download skills
     for skill_entry in "${SKILLS[@]}"; do
         source_path="${skill_entry%%|*}"
         rest="${skill_entry#*|}"
-        install_name="${rest%%|*}"
         skill_files_str="${rest#*|}"
         IFS=',' read -ra skill_files <<< "${skill_files_str}"
 
-        info "Downloading ${install_name} skill files..."
-
         for file in "${skill_files[@]}"; do
-            url="${REPO_RAW_BASE}/skills/${source_path}/${file}"
-            dest="${TMPDIR_DOWNLOAD}/skills/${source_path}/${file}"
-            mkdir -p "$(dirname "${dest}")"
-            if fetch "${url}" > "${dest}" 2>/dev/null; then
-                if [ ! -s "${dest}" ]; then
-                    error "Downloaded ${source_path}/${file} is empty."
-                    FAIL=1
-                fi
-            else
-                error "Failed to download ${source_path}/${file} from ${url}"
+            if [ ! -s "${SRC_DIR}/skills/${source_path}/${file}" ]; then
+                error "Archive is missing skills/${source_path}/${file}."
                 FAIL=1
             fi
         done
 
-        # Verify SKILL.md has expected frontmatter
-        if [ -f "${TMPDIR_DOWNLOAD}/skills/${source_path}/SKILL.md" ]; then
-            if ! head -1 "${TMPDIR_DOWNLOAD}/skills/${source_path}/SKILL.md" | grep -q "^---"; then
+        if [ -f "${SRC_DIR}/skills/${source_path}/SKILL.md" ]; then
+            if ! head -1 "${SRC_DIR}/skills/${source_path}/SKILL.md" | grep -q "^---"; then
                 error "${source_path}/SKILL.md does not look like a valid skill file (missing frontmatter)."
                 FAIL=1
             fi
         fi
     done
 
-    # Download hooks
-    info "Downloading hook files..."
-    mkdir -p "${TMPDIR_DOWNLOAD}/hooks"
-    for hook_file in "${HOOK_FILES[@]}"; do
-        url="${REPO_RAW_BASE}/hooks/${hook_file}"
-        dest="${TMPDIR_DOWNLOAD}/hooks/${hook_file}"
-        if fetch "${url}" > "${dest}" 2>/dev/null; then
-            if [ ! -s "${dest}" ]; then
-                error "Downloaded hooks/${hook_file} is empty."
-                FAIL=1
-            fi
-        else
-            error "Failed to download hooks/${hook_file} from ${url}"
+    for hook_file in "${INSTALL_HOOKS[@]}"; do
+        if [ ! -s "${SRC_DIR}/hooks/${hook_file}" ]; then
+            error "Archive is missing hooks/${hook_file}."
             FAIL=1
         fi
     done
 
     if [ "${FAIL}" -ne 0 ]; then
-        error "One or more files failed to download. Installation aborted."
+        error "Archive is missing required files. Installation aborted."
         exit 1
     fi
 
-    # ── Install skills ────────────────────────────────────────────
-    for skill_entry in "${SKILLS[@]}"; do
-        source_path="${skill_entry%%|*}"
-        rest="${skill_entry#*|}"
-        install_name="${rest%%|*}"
-        skill_files_str="${rest#*|}"
-        IFS=',' read -ra skill_files <<< "${skill_files_str}"
-
-        target_dir="${PROJECT_ROOT}/.claude/skills/${install_name}"
-
-        for file in "${skill_files[@]}"; do
-            dest="${target_dir}/${file}"
-            mkdir -p "$(dirname "${dest}")"
-            cp "${TMPDIR_DOWNLOAD}/skills/${source_path}/${file}" "${dest}"
-            INSTALLED_FILES+=("${dest}")
-        done
-    done
-
-    # ── Remove renamed hook file (wise_mode.py -> mode_persistence.py) ──
-    rm -f "${PROJECT_ROOT}/.claude/hooks/wise_mode.py"
-
-    # ── Remove skills that were folded into other skills ──────────
-    for removed in "${REMOVED_SKILLS[@]}"; do
-        removed_dir="${PROJECT_ROOT}/.claude/skills/${removed}"
-        if [ -f "${removed_dir}/SKILL.md" ]; then
-            rm -rf "${removed_dir}"
-            info "Removed ${removed} (now a phase of wise-flow)"
-        fi
-    done
-
-    # ── Make skill scripts executable ─────────────────────────────
-    # Only the files this installer wrote. A find over .claude/skills would also
-    # chmod scripts belonging to skills installed from somewhere else.
-    for installed in "${INSTALLED_FILES[@]}"; do
-        case "${installed}" in
-            *.sh) chmod +x "${installed}" ;;
-        esac
-    done
-
-    # ── Install hooks ─────────────────────────────────────────────
-    hooks_dir="${PROJECT_ROOT}/.claude/hooks"
-    mkdir -p "${hooks_dir}"
-    for hook_file in "${HOOK_FILES[@]}"; do
-        dest="${hooks_dir}/${hook_file}"
-        cp "${TMPDIR_DOWNLOAD}/hooks/${hook_file}" "${dest}"
-        chmod +x "${dest}"
-        INSTALLED_FILES+=("${dest}")
-    done
-
-    # ── Merge hooks config into settings.local.json ───────────────
-    SETTINGS_PATH="${PROJECT_ROOT}/.claude/settings.local.json"
+    # ── Compute the merged settings BEFORE placement ──────────────
+    MERGED_SETTINGS="${TMPDIR_DOWNLOAD}/settings.local.json"
     python3 -c "
 import json, os, sys
 
 settings_path = sys.argv[1]
 hooks_config = json.loads(sys.argv[2])
+session_log_config = json.loads(sys.argv[3])
+session_log_opted_in = sys.argv[4] == '1'
+if session_log_opted_in:
+    hooks_config.update(session_log_config)
+output_path = sys.argv[5]
 
 if os.path.exists(settings_path):
     with open(settings_path) as f:
@@ -308,6 +384,20 @@ legacy_commands = {
         'python3 .claude/hooks/session_log.py Stop',
     },
 }
+# session_log moved to explicit opt-in. Older installs wired it by default; a
+# reinstall without --with-session-log unwires exactly the commands this
+# installer itself writes — full-string match against the shipped config, never
+# a substring match. A substring match on the file name would also delete
+# third-party hooks that merely mention it (a user-owned
+# /opt/acme/session_log.py wiring would be lost that way).
+if not session_log_opted_in:
+    for event, entries in session_log_config.items():
+        commands = {
+            hook.get('command', '')
+            for entry in entries
+            for hook in entry.get('hooks', [])
+        }
+        legacy_commands.setdefault(event, set()).update(commands)
 
 for event, entries in list(existing_hooks.items()):
     cleaned_entries = []
@@ -347,11 +437,91 @@ for event, entries in hooks_config.items():
 
 settings['hooks'] = existing_hooks
 
-with open(settings_path, 'w') as f:
+with open(output_path, 'w') as f:
     json.dump(settings, f, indent=2)
     f.write('\n')
-" "${SETTINGS_PATH}" "${HOOKS_CONFIG}"
+" "${SETTINGS_PATH}" "${HOOKS_CONFIG}" "${SESSION_LOG_HOOKS_CONFIG}" "${WITH_SESSION_LOG}" "${MERGED_SETTINGS}"
 
+    # ── Stage the complete payload, then swap into place ──────────
+    # Copying straight into .claude/ can fail halfway (permissions, disk
+    # full) and leave a half-copied skill. Stage everything first — any
+    # failure here aborts with .claude/ untouched — then swap one mv per
+    # skill/hook, so each unit is either the old version or the new one,
+    # never half of each.
+    rm -rf "${STAGING_DIR}"
+    mkdir -p "${STAGING_DIR}/skills" "${STAGING_DIR}/hooks"
+
+    INSTALLED_FILES=()
+    for skill_entry in "${SKILLS[@]}"; do
+        source_path="${skill_entry%%|*}"
+        rest="${skill_entry#*|}"
+        install_name="${rest%%|*}"
+        skill_files_str="${rest#*|}"
+        IFS=',' read -ra skill_files <<< "${skill_files_str}"
+
+        for file in "${skill_files[@]}"; do
+            staged="${STAGING_DIR}/skills/${install_name}/${file}"
+            mkdir -p "$(dirname "${staged}")"
+            cp "${SRC_DIR}/skills/${source_path}/${file}" "${staged}"
+            case "${staged}" in
+                *.sh) chmod +x "${staged}" ;;
+            esac
+            INSTALLED_FILES+=("${PROJECT_ROOT}/.claude/skills/${install_name}/${file}")
+        done
+    done
+
+    for hook_file in "${INSTALL_HOOKS[@]}"; do
+        staged="${STAGING_DIR}/hooks/${hook_file}"
+        cp "${SRC_DIR}/hooks/${hook_file}" "${staged}"
+        chmod +x "${staged}"
+        INSTALLED_FILES+=("${PROJECT_ROOT}/.claude/hooks/${hook_file}")
+    done
+
+    # ── Swap skills into place (one mv per skill) ─────────────────
+    mkdir -p "${PROJECT_ROOT}/.claude/skills"
+    for skill_entry in "${SKILLS[@]}"; do
+        rest="${skill_entry#*|}"
+        install_name="${rest%%|*}"
+        dest="${PROJECT_ROOT}/.claude/skills/${install_name}"
+        rm -rf "${dest}"
+        mv "${STAGING_DIR}/skills/${install_name}" "${dest}"
+    done
+
+    # ── Remove renamed hook file (wise_mode.py -> mode_persistence.py) ──
+    rm -f "${PROJECT_ROOT}/.claude/hooks/wise_mode.py"
+
+    # ── Remove skills that were folded into other skills ──────────
+    # Consent came from the prompt above: REMOVED_PRESENT forces EXISTING=1.
+    for removed in "${REMOVED_SKILLS[@]}"; do
+        removed_dir="${PROJECT_ROOT}/.claude/skills/${removed}"
+        if [ -f "${removed_dir}/SKILL.md" ]; then
+            rm -rf "${removed_dir}"
+            info "Removed ${removed} (folded into wise-flow)"
+        fi
+    done
+
+    # ── Swap hooks into place (one mv per file — an atomic rename) ─
+    hooks_dir="${PROJECT_ROOT}/.claude/hooks"
+    mkdir -p "${hooks_dir}"
+    if [ "${WITH_SESSION_LOG}" -ne 1 ] && [ -f "${hooks_dir}/${SESSION_LOG_HOOK}" ]; then
+        # session_log is opt-in now. This reinstall unwires the installer's own
+        # session_log commands in the settings merge above, but never deletes
+        # the file: a name match cannot prove the installer wrote it, and it
+        # may be user-owned or locally modified.
+        warn "session_log.py is present but no longer wired (opt in: --with-session-log)."
+        # Relative path on purpose: interpolating ${hooks_dir} would hand the
+        # user a copy-paste command that splits on a space in the project path.
+        warn "Remove the file yourself if unwanted: rm .claude/hooks/${SESSION_LOG_HOOK}"
+    fi
+    for hook_file in "${INSTALL_HOOKS[@]}"; do
+        mv -f "${STAGING_DIR}/hooks/${hook_file}" "${hooks_dir}/${hook_file}"
+    done
+
+    rm -rf "${STAGING_DIR}"
+
+    # ── Write the pre-computed settings LAST ──────────────────────
+    mkdir -p "$(dirname "${SETTINGS_PATH}")"
+    cp "${MERGED_SETTINGS}" "${SETTINGS_PATH}"
     ok "Hooks configuration merged into .claude/settings.local.json"
 
     # ── Summary ───────────────────────────────────────────────────
@@ -369,18 +539,22 @@ with open(settings_path, 'w') as f:
     echo "    /wise             - Architect mode for a single task"
     echo "    /wise-cont        - Architect mode for the entire session"
     echo "    /wise-flow        - Source-first development flow router (phases live inside it)"
-    echo "    /dev-with-review  - Implement + continuous self-review + independent AI review"
     echo "    /attack-on-hacker - Adversarial source-code security review"
     echo "    /pr-self-review   - Self code review on own diff before opening a PR"
     echo ""
-    info "Session logs are written to .claude/log/ automatically by the hook."
+    if [ "${WITH_SESSION_LOG}" -eq 1 ]; then
+        info "Session logs are written to .claude/log/ automatically by the hook."
+    else
+        info "Session logs hook not installed (opt in: install.sh --with-session-log)."
+    fi
     echo ""
 
     # ── Check: are the session logs actually ignored? ──────────────
     # The PostToolUse hook writes tool input and command output to
     # .claude/log/. Secrets are masked before writing, but the masking is
     # pattern-based, so these files stay sensitive and should not be committed.
-    if git -C "${PROJECT_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ "${WITH_SESSION_LOG}" -eq 1 ] && \
+        git -C "${PROJECT_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         # Trailing slash matters: a directory-only rule like `.claude/log/` does
         # not match the path `.claude/log` while that directory does not exist yet.
         if git -C "${PROJECT_ROOT}" check-ignore -q ".claude/log/" 2>/dev/null; then

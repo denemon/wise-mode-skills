@@ -2,11 +2,11 @@
 
 ### Secrets in code and history
 
-- Code: `rg -i "password|secret|api[_-]?key|token|aws_access_key|BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY"`
+- Code identifiers only: `rg -n -i -o "password|secret|api[_-]?key|token|aws_access_key|BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY" .`. The explicit `.` makes the repository the target even when stdin is not a terminal; `-o` is mandatory because it prints the matched identifier, not the surrounding value.
 - Untracked candidates: `git ls-files --others --exclude-standard | rg -i "\.env|\.pem$|\.key$|credentials"`
-- Git history: `git log --all -p -- '*.env*' '*.pem' '*.key' 2>/dev/null | rg -i "BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY|aws_secret|api_key"`
+- Git-history candidates without patch contents: `git log --all --format='%H %ad %s' --date=short -- '*.env*' '*.pem' '*.key'`. Record the candidate commit; do not add `-p` or print a matching value.
 - Secrets removed from HEAD are still leaked via history — recommend rotation, not just deletion.
-- Use `trufflehog`, `gitleaks`, or `detect-secrets` if available in the environment.
+- Use `trufflehog`, `gitleaks`, or `detect-secrets` if available and configured to redact values. If no redacting scanner is available, report only candidate path/line/commit and secret type; never print the value to inspect it.
 
 ### CI / CD pwn-request patterns
 
@@ -37,7 +37,7 @@
 
 ### Dependency surface
 
-- Run the project's audit tool: `npm audit`, `pnpm audit`, `yarn audit`, `pip-audit`, `bundle audit`, `cargo audit`, `gosec`.
+- Run only the read-only form of the project's audit tool: `npm audit`, `pnpm audit`, `yarn audit`, `pip-audit`, `bundle audit`, `cargo audit`, or `gosec ./...`. Do not add repair/update flags during a review.
 - Lockfile drift: lockfile missing, out of sync with the manifest, or not committed.
 - Unpinned VCS dependencies (`git+https://...`, `github:org/repo` without commit pin).
 - Newly added third-party packages: review maintainer, download stats, and typosquat similarity to popular packages.

@@ -78,5 +78,5 @@ Return a Handoff Note:
 - <skill> -> <why>
 ```
 
-Save the note to a temporary directory only if the user asks for a file or the
-session needs durable handoff.
+Save the note to `.claude/flow/handoff.md` under the artifact contract in
+`SKILL.md`.

@@ -1,19 +1,17 @@
 ---
 name: wise-cont
 description: >
-  Persistent wise mode for the entire session.
-  Once /wise-cont is invoked, all subsequent user messages automatically receive
-  wise (Software Architect) mode principles and phases.
-  /wise-cont-off to deactivate.
-  Also trigger on phrases like "keep wise on", "stay in architect mode", "continuous wise".
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Agent, TodoWrite, WebFetch, AskUserQuestion
+  Persistent project-wide wise mode across current and future sessions.
+  Invoke only through `/wise-cont`; all subsequent user messages receive wise
+  (Software Architect) principles and phases until `/wise-cont-off`.
+disable-model-invocation: true
 ---
 
 # Continuous Architect Mode — wise-cont
 
 ## What This Skill Does
 
-**From the moment `/wise-cont` is invoked, every response in this session operates under wise mode.**
+**From the moment `/wise-cont` is invoked, every response in every session for this project operates under wise mode.**
 
 The user no longer needs to type `/wise` for each task. Regardless of task size, architect-level thinking persists across all subsequent messages.
 
@@ -45,8 +43,8 @@ When `/wise-cont` is invoked, display the following to confirm activation:
 ```
 ## [WISE MODE: CONTINUOUS]
 
-Architect mode activated for this session.
-All subsequent requests will be handled under wise mode.
+Architect mode activated project-wide.
+Current and future sessions in this project use wise mode until deactivation.
 Deactivate: /wise-cont-off
 ```
 
@@ -77,7 +75,7 @@ Prefix every response with one of the following:
 | Question or discussion (no code changes) | Q&A | Core Identity thinking principles only |
 | Single file, < 50 lines, low risk | Lightweight | Phase 1 (abbreviated) → 4 → 7 |
 | 2–3 files, clear scope | Full (Medium) | Phase 1–8 |
-| 4+ files, new dependencies, schema changes, etc. | Full (Complex) | Phase 1–8 + GitHub issue required |
+| 4+ files, new dependencies, schema changes, etc. | Full (Complex) | Phase 1–8; issue only on explicit request |
 
 ### Rule 4: Core Identity is always maintained
 
@@ -99,9 +97,9 @@ wise-cont is a wrapper that automatically applies those phases — it does not r
 | 3 | TDD | RED → GREEN → REFACTOR |
 | 4 | Implementation | Build following established patterns |
 | 5 | Test Suite Verification | Ensure no regressions |
-| 6 | Documentation & GitHub | Update docs and issues |
+| 6 | Documentation & GitHub | Update docs; update an explicitly requested issue |
 | 7 | Pre-Commit Review | Adversarial self-review |
-| 8 | PR & Review Readiness | Open clean PR, handle review bots |
+| 8 | PR & Review Readiness | Open a PR only on explicit request; otherwise report branch readiness |
 
 ---
 
@@ -127,6 +125,6 @@ After deactivation, return to normal responses. Do not apply wise principles.
 | Situation | Recommended |
 |-----------|-------------|
 | Run architect mode for a single task only | `/wise` |
-| Maintain architect mode throughout the session | `/wise-cont` |
+| Maintain architect mode throughout the project | `/wise-cont` |
 | Add architect mode partway through a session | `/wise-cont` (persists from that point) |
 | Temporarily disable architect mode | `/wise-cont-off` |

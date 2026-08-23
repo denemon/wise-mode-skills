@@ -14,7 +14,7 @@
 
 安全弁を 3 つ持たせてある。ゲートがセッションを人質に取らないため:
   1. 3 回連続で失敗したら降参して人間に渡す（CLAUDE.md の「三回で止まる」と一致）
-  2. 追跡ソースが前回の緑から変化していなければ check.sh を走らせない
+  2. ソース（追跡＋未追跡）が前回の緑から変化していなければ check.sh を走らせない
      （会話だけのターンは無料。全層は約 20 秒かかる）
   3. check.sh がハングしてもタイムアウトで通す
 """
@@ -82,17 +82,25 @@ def project_root(payload: dict) -> Path:
 
 
 def source_fingerprint(root: Path) -> str | None:
-    """追跡ファイルの内容ハッシュ。git が無ければ None（＝常に検証する）。"""
-    try:
-        listing = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z"],
-            capture_output=True, timeout=30, check=True,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
+    """追跡＋未追跡ファイルの内容ハッシュ。git が無ければ None（＝常に検証する）。
+
+    未追跡（.gitignore 除外後）も含める。check.sh のテスト発見はファイル
+    システム走査なので未追跡の test_*.py も実行される。追跡分しか見ないと
+    「緑の記録後に未追跡ファイルだけを壊した」状態で digest が変わらず、
+    ゲートが check.sh をスキップして緑のまま停止を許す。
+    """
+    names: set[bytes] = set()
+    for extra in ((), ("--others", "--exclude-standard")):
+        try:
+            names.update(subprocess.run(
+                ["git", "-C", str(root), "ls-files", "-z", *extra],
+                capture_output=True, timeout=30, check=True,
+            ).stdout.split(b"\0"))
+        except (OSError, subprocess.SubprocessError):
+            return None
 
     digest = hashlib.sha256()
-    for name in sorted(listing.split(b"\0")):
+    for name in sorted(names):
         if not name:
             continue
         digest.update(name)

@@ -1,7 +1,7 @@
 ---
 name: wise
-description: Architect-mode development guidance for non-trivial changes spanning 3+ files, new feature implementation, architectural refactoring, or bug fixes involving concurrency/shared state. Applies TDD (RED→GREEN→REFACTOR), systematic planning, GitHub issue tracking, adversarial self-review, and quality gates. Do NOT trigger for single-file edits under 50 lines, documentation-only changes, dependency version bumps, or simple config tweaks — those are better handled without the full ceremony.
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Agent, TodoWrite, WebFetch, AskUserQuestion
+description: Architect-mode development guidance applying TDD (RED→GREEN→REFACTOR), systematic planning, optional GitHub issue tracking, adversarial self-review, and quality gates. Invoke only through `/wise` for non-trivial changes spanning 3+ files, new features, architectural refactors, or concurrency/shared-state bugs; avoid it for small edits.
+disable-model-invocation: true
 ---
 
 # Software Architect Mode — wise
@@ -35,8 +35,8 @@ Read these instead of reproducing their content here:
 |-------|----------|---------|
 | **Q&A** | Question or discussion, no code change | Core Identity thinking only — no phases |
 | **Simple** | Single file, < 50 lines, no interface change, no shared state | Phase 1 (abbreviated) → 4 → 7 |
-| **Medium** | 2–3 files, clear scope, no new deps or migrations | Phase 1–8, GitHub issue recommended |
-| **Complex** | 4+ files, new deps, interface/schema change, migration, concurrency | Phase 1–8, GitHub issue required |
+| **Medium** | 2–3 files, clear scope, no new deps or migrations | Phase 1–8; issue only on explicit request |
+| **Complex** | 4+ files, new deps, interface/schema change, migration, concurrency | Phase 1–8; issue only on explicit request |
 
 Unsure → use the heavier one. Ceremony that doesn't fit the task is waste, but a
 missed concurrency bug costs more than an unnecessary phase.
@@ -70,9 +70,9 @@ Read project guidance first — `CLAUDE.md`, `CONTRIBUTING.md`, `README.md`,
 `.github/PULL_REQUEST_TEMPLATE.md`, `docs/`. Adapt to whatever exists; do not
 fail on a missing file.
 
-Then: `TodoWrite` the phases, assess the weight (table above), and for Medium+
-find or open a GitHub issue — it is the source of truth for the rest of the work
-(commands in `CHECKLISTS.md`).
+Then: `TodoWrite` the phases and assess the weight (table above). Find, create,
+or update a GitHub issue only when the user explicitly requested issue tracking;
+otherwise keep the plan in-session. Commands are in `CHECKLISTS.md`.
 
 **Checkpoint**: Summarize understanding and plan. Ask if anything is ambiguous.
 
@@ -114,9 +114,10 @@ Before touching shared mutable state, write down all actors that can modify it,
 the concurrent scenarios, the invariants, and the coordination strategy. TOCTOU
 and transaction-side-effect patterns are in `PATTERNS.md`.
 
-**If the design from Phase 1–2 turns out wrong**: stop coding, stash the work,
-return to Phase 2 with the new understanding, update the todos and issue, resume
-from Phase 3. This is the process working, not failure.
+**If the design from Phase 1–2 turns out wrong**: stop coding, keep the worktree
+intact, return to Phase 2 with the new understanding, update the todos, and
+update the issue only if issue tracking was explicitly requested. Then resume
+from Phase 3. Do not hide unrelated user changes in a stash.
 
 **Checkpoint**: Implementation complete, new tests passing.
 
@@ -131,10 +132,11 @@ failures. **Never commit with failing tests.**
 ## Phase 6: Documentation & GitHub
 
 Update the docs your change affects, update the project's guidance document if
-you changed a convention, delete dead code instead of commenting it out, and
-check off the issue's acceptance criteria.
+you changed a convention, and delete dead code instead of commenting it out. If
+issue tracking was explicitly requested, check off the issue's acceptance
+criteria; otherwise do not create or update an issue.
 
-**Checkpoint**: Docs and issue reflect reality.
+**Checkpoint**: Docs reflect reality; an explicitly requested issue does too.
 
 ## Phase 7: Pre-Commit Review
 
@@ -145,26 +147,32 @@ Every item is a real check, not a formality.
 
 ## Phase 8: PR & Review Readiness
 
-Read `git diff main...HEAD` as a hostile reviewer: missing error handling, race
-conditions, security issues, test gaps. Then open the PR with a description
-linking the issue and summarizing the approach.
+Run `/pr-self-review` with no arguments so its HEAD route reviews committed,
+staged, unstaged, and untracked changes against the resolved base.
+Open the PR only when the user explicitly requested it; otherwise report that
+the branch is ready and provide the proposed description.
 
-If the repo runs review bots (Bug Bot, CodeRabbit, …): wait for the status check
-after each push, and answer every finding with a fix commit or a false-positive
-explanation. Never declare a PR ready while a bot check is pending. Bot cycles
-can outlive a session — when that happens, record the pending items in the PR
-description and the issue so the next session can resume.
+If a PR was explicitly requested and opened, and the repo runs review bots (Bug
+Bot, CodeRabbit, …), wait for the status check after each authorized push and
+answer every finding with a fix commit or a false-positive explanation. Never
+declare that PR ready while a bot check is pending. Bot cycles can outlive a
+session — when that happens, record pending items in the PR description and, if
+issue tracking was explicitly requested, the issue so the next session can
+resume. Without an open PR, skip bot waiting.
 
 For repos without bots, your Phase 8 self-review is the only gate. Be thorough.
 
-**Checkpoint**: PR open and clean, or pending items explicitly documented.
+**Checkpoint**: If a PR was explicitly requested, it is open and clean or its
+pending items are documented. Otherwise the branch is ready and the proposed PR
+description is reported without opening a PR.
 
 ---
 
 ## Summary Output
 
 Close with: what was built, files modified, tests added, docs updated, issue
-status, PR status, and next steps (including pending bot cycles).
+status if applicable, PR status or branch readiness, and next steps (including
+pending bot cycles).
 
 ## Remember
 
