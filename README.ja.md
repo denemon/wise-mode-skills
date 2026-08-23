@@ -833,6 +833,19 @@ python3 -m unittest discover -s benchmarks   # the metric script
 ## アンインストール
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/uninstall.sh | bash
+```
+
+`uninstall.sh` はインストール済みのスキル・フック・モードフラグを削除し、
+`install.sh` が `.claude/settings.local.json` に書くフックコマンドだけを
+**完全一致**で配線解除する(第三者のフックや他の設定には触れない)。
+削除対象を先に列挙して確認を求める。非対話実行では `--yes`
+(`bash -s -- --yes`)でプロンプトを省略できる。データは消さない:
+`.claude/log/` と `.claude/flow/` は残し、片付けコマンドを案内する。
+
+### 手動アンインストール
+
+```bash
 # All components
 rm -rf .claude/skills/{wise,wise-cont,wise-flow,attack-on-hacker,pr-self-review,swarm,terse-mode}
 rm -f .claude/hooks/session_log.py .claude/hooks/mode_persistence.py .claude/hooks/flag_guard.py

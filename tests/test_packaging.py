@@ -330,7 +330,7 @@ class SingleCheckEntrypointTest(unittest.TestCase):
         # 開発機は bash 3.2、CI は bash 5。CI では通ってローカルで落ちる。
         # 実際 mapfile を書いて macOS で落ちた。timeout も stock macOS に無い。
         # 判定対象はコードだけ — 「使うな」と書いたコメントに反応しては困る。
-        scripts = [ROOT / "check.sh", ROOT / "install.sh"]
+        scripts = [ROOT / "check.sh", ROOT / "install.sh", ROOT / "uninstall.sh"]
         scripts += sorted(SKILLS_DIR.glob("*/scripts/*.sh"))
         for script in scripts:
             code = "\n".join(line for line in script.read_text(encoding="utf-8").splitlines()
@@ -458,6 +458,51 @@ class ReadmeJaTest(unittest.TestCase):
             'raw.githubusercontent.com/den-emon/wise-mode/${REF}/install.sh',
             README_JA)
         self.assertIn('WISE_MODE_REF="${REF}"', README_JA)
+
+
+class UninstallScriptParityTest(unittest.TestCase):
+    """install.sh と uninstall.sh の manifest がドリフトしないよう機械で固定する。
+
+    片方にスキルやフックを足して片方を忘れると、アンインストールが黙って
+    残す。実行時の挙動は tests/test_uninstall.py — ここは静的なパリティのみ。
+    """
+
+    def setUp(self):
+        self.source = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
+
+    def _array(self, name: str) -> list[str]:
+        block = re.search(rf"^\s*{name}=\((.*?)\)", self.source,
+                          re.DOTALL | re.MULTILINE)
+        self.assertIsNotNone(block, f"{name} array not found in uninstall.sh")
+        return re.findall(r'"([^"]+)"', block.group(1))
+
+    def test_skill_dirs_match_install_manifest(self):
+        install_names = [e.split("|")[1] for e in _bash_array("SKILLS")]
+        self.assertEqual(sorted(self._array("SKILL_DIRS")), sorted(install_names))
+
+    def test_removed_skills_match_install_manifest(self):
+        self.assertEqual(sorted(self._array("REMOVED_SKILLS")),
+                         sorted(_bash_array("REMOVED_SKILLS")))
+
+    def test_hook_files_cover_everything_install_places(self):
+        # SESSION_LOG_HOOK は opt-in の単独変数なので配列には出ない。
+        placeable = set(_bash_array("HOOK_FILES")) | {"session_log.py"}
+        self.assertEqual(set(self._array("HOOK_FILES")), placeable)
+
+    def test_canonical_commands_cover_everything_install_wires(self):
+        # 配線解除は完全一致で行う(部分一致は第三者 hook を巻き込む)ので、
+        # install が書くコマンド文字列が 1 つでも漏れると外れない。
+        written = set()
+        for config in (_installer_hook_config(), _installer_session_log_config()):
+            for entries in config.values():
+                for entry in entries:
+                    for hook in entry.get("hooks", []):
+                        written.add(hook["command"])
+        block = re.search(r"CANONICAL_COMMANDS='(\[.*?\])'", self.source, re.DOTALL)
+        self.assertIsNotNone(block, "CANONICAL_COMMANDS not found in uninstall.sh")
+        canonical = set(json.loads(block.group(1)))
+        self.assertTrue(written <= canonical,
+                        f"uninstall が外さない配線: {sorted(written - canonical)}")
 
 
 class CiIsReachableTest(unittest.TestCase):

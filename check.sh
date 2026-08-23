@@ -49,21 +49,21 @@ fi
 SUITE_TIMEOUT=120
 
 # 遅い統合スイート。実プロセスを起動するので秒単位でかかる。
-SLOW_TESTS="test_install|test_ai_review|test_evals"
+SLOW_TESTS="test_install|test_uninstall|test_ai_review|test_evals"
 
 fail=0
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 note() { printf '   %s\n' "$1"; }
 
 step "bash syntax"
-for f in install.sh check.sh skills/*/scripts/*.sh; do
+for f in install.sh uninstall.sh check.sh skills/*/scripts/*.sh; do
     bash -n "$f" || { note "FAILED: $f"; fail=1; }
 done
 [ "$fail" -eq 0 ] && note "ok"
 
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck install.sh check.sh skills/*/scripts/*.sh || fail=1
+    shellcheck install.sh uninstall.sh check.sh skills/*/scripts/*.sh || fail=1
     note "clean"
 else
     # CI には必ず在る。ローカルに無いことを検証の欠落として黙らせない。

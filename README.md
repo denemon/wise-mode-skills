@@ -826,6 +826,19 @@ them.
 ## Uninstall
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/den-emon/wise-mode/main/uninstall.sh | bash
+```
+
+`uninstall.sh` removes the installed skills, hooks, and mode flags, and unwires
+exactly the hook commands `install.sh` writes into `.claude/settings.local.json`
+(full-string match — third-party hooks and your other settings are untouched).
+It lists everything first and asks for confirmation; pass `--yes` (`bash -s --
+--yes`) to skip the prompt in non-interactive runs. Data is never deleted:
+`.claude/log/` and `.claude/flow/` are kept, with a cleanup command printed.
+
+### Manual uninstall
+
+```bash
 # All components
 rm -rf .claude/skills/{wise,wise-cont,wise-flow,attack-on-hacker,pr-self-review,swarm,terse-mode}
 rm -f .claude/hooks/session_log.py .claude/hooks/mode_persistence.py .claude/hooks/flag_guard.py
