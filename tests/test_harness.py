@@ -277,27 +277,38 @@ class GateSafetyTest(unittest.TestCase):
         # そのまま検証すると嘘の失敗でセッションを止める。
         # ヘルパーではなく**呼び出し側の配線**を通すこと — 初版はヘルパーだけを
         # 見ていて、分岐を潰しても緑のままだった。
-        lock = Path(gate.audit_lock_path(ROOT))
-        state = ROOT / ".claude" / ".check-gate"
-        saved = state.read_text(encoding="utf-8") if state.is_file() else None
-        lock.write_text(str(os.getpid()), encoding="utf-8")
-        env = {k: v for k, v in os.environ.items() if k != gate.RECURSION_ENV}
-        env["CLAUDE_PROJECT_DIR"] = str(ROOT)
-        try:
-            result = subprocess.run(
-                ["python3", str(HOOKS / "check_gate.py")],
-                input=json.dumps({"cwd": str(ROOT)}), cwd=str(ROOT),
-                capture_output=True, text=True, timeout=120, env=env)
-        finally:
-            lock.unlink(missing_ok=True)
-            if saved is None:
-                state.unlink(missing_ok=True)
-            else:
-                state.write_text(saved, encoding="utf-8")
+        # 実リポジトリのキャッシュや監査ロックに触れない。キャッシュが一致する
+        # 場合も明示的に再現する — 以前は decide の早期 return が監査判定を飛ばした。
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / ".gitignore").write_text(".claude/\n", encoding="utf-8")
+            (root / ".claude").mkdir()
+            script = root / "check.sh"
+            script.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            script.chmod(0o755)
+            state_path = root / ".claude" / gate.STATE_NAME
+            lock = gate.audit_lock_path(root)
+            lock.write_text(str(os.getpid()), encoding="utf-8")
+            try:
+                for cached_green in (False, True):
+                    with self.subTest(cached_green=cached_green):
+                        state = {"attempts": 1}
+                        if cached_green:
+                            state["green_fingerprint"] = gate.source_fingerprint(root)
+                            self.assertIsNotNone(state["green_fingerprint"])
+                        state_path.write_text(json.dumps(state), encoding="utf-8")
+                        result = self._run(json.dumps({"cwd": str(root)}), root)
 
-        self.assertEqual(result.returncode, 0, "監査中に停止をブロックしてはいけない")
-        self.assertIn("mutation audit is running", result.stderr)
-        self.assertIn("do not treat this as green", result.stderr.lower())
+                        self.assertEqual(result.returncode, 0,
+                                         "監査中に停止をブロックしてはいけない")
+                        self.assertIn("mutation audit is running", result.stderr)
+                        self.assertIn("do not treat this as green", result.stderr.lower())
+                        saved = gate.load_state(state_path)
+                        self.assertNotIn("green_fingerprint", saved)
+                        self.assertEqual(saved["attempts"], 1)
+            finally:
+                lock.unlink(missing_ok=True)
 
     def test_garbage_stdin_allows_stop(self):
         with tempfile.TemporaryDirectory() as tmpdir:

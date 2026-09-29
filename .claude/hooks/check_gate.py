@@ -262,7 +262,10 @@ def main(stdin_text: str | None = None) -> int:
         return ("pass" if proc.returncode == 0 else "fail"), proc.stdout + proc.stderr
 
     previous = load_state(state_path)
-    code, message, state = decide(previous, source_fingerprint(root), run_check)
+    # 監査中はキャッシュを使わず、変異したツリーの fingerprint も読まない。
+    # 緑の記録と一致していても run_check の判定不能を必ず通す。
+    fingerprint = None if audit_in_progress(root) else source_fingerprint(root)
+    code, message, state = decide(previous, fingerprint, run_check)
 
     state = carry_forward(previous, state)
 
