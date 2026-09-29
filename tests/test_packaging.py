@@ -45,7 +45,6 @@ def skill_dirs() -> list[Path]:
 
 README_JA = (ROOT / "README.ja.md").read_text(encoding="utf-8")
 CHECK_SH = (ROOT / "check.sh").read_text(encoding="utf-8")
-CI_YML = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
 
 def _usage_commands() -> list[str]:
@@ -253,7 +252,7 @@ class TestLayoutTest(unittest.TestCase):
 
     def test_check_sh_runs_every_suite(self):
         # check.sh が検証範囲の唯一の正。4 つ目のスイートを足して
-        # ここに通さなければ、CI も Stop ゲートも黙ってそれを走らせない。
+        # ここに通さなければ、check.sh も Stop ゲートも黙ってそれを走らせない。
         for name in TEST_DIRS:
             with self.subTest(dir=name):
                 self.assertIn(name, CHECK_SH)
@@ -263,18 +262,8 @@ class SingleCheckEntrypointTest(unittest.TestCase):
     """検証コマンドが 1 つであり続けるか
 
     手で組み立て直せる状態だと、その都度「どこまで見たか」が実行者の裁量になる。
-    CI・README・Stop ゲートが同じ 1 本を指していることを固定する。
+    README・Stop ゲートが同じ 1 本を指していることを固定する。
     """
-
-    def test_ci_calls_check_sh(self):
-        # 「どこかに ./check.sh がある」では不足。回帰ジョブを潰しても監査ジョブの
-        # 記述が残って通ってしまう（変異監査が実際にこれを見つけた）。
-        # 実行されるコマンドとして 2 つとも在ることを見る。
-        runs = [r.strip() for r in re.findall(r"run:\s*(\./check\.sh.*)", CI_YML)]
-        self.assertIn("./check.sh", runs, "回帰ジョブ（引数なし）が無い")
-        self.assertIn("./check.sh --mutants", runs, "変異監査ジョブが無い")
-        # CI が独自にチェックを並べ直していないこと（check.sh を迂回する層を作らない）
-        self.assertNotIn("unittest discover", CI_YML)
 
     def test_readme_documents_check_sh(self):
         self.assertIn("./check.sh", README)
@@ -299,7 +288,7 @@ class SingleCheckEntrypointTest(unittest.TestCase):
 
     def test_every_mutation_targets_text_that_still_exists(self):
         # リファクタで「置換前」が消えると、その変異は黙って無効になる
-        # （監査は STALE と言うが、CI を通す前に気づきたい）。
+        # （監査は STALE と言うが、監査を回す前に気づきたい）。
         for name, rel, before, _after, test_dir, module in mutants.MUTANTS:
             with self.subTest(mutant=name):
                 path = ROOT / rel
@@ -319,15 +308,13 @@ class SingleCheckEntrypointTest(unittest.TestCase):
 
     def test_check_sh_exposes_the_audit(self):
         self.assertIn("--mutants", CHECK_SH)
-        self.assertIn("--mutants", CI_YML, "CI が変異監査を回していない")
 
     def test_check_sh_exposes_the_evals(self):
-        # スキル挙動の実測入口。課金される実 API 呼び出しなので CI には入れない
-        # — CI_YML への追加はここでは要求しない。
+        # スキル挙動の実測入口。課金される実 API 呼び出しなので手動のみ。
         self.assertIn('exec python3 tools/evals.py', CHECK_SH)
 
     def test_shell_scripts_avoid_bash4_and_gnu_only_constructs(self):
-        # 開発機は bash 3.2、CI は bash 5。CI では通ってローカルで落ちる。
+        # 開発機は bash 3.2。新しい bash では通っても既定の macOS で落ちる。
         # 実際 mapfile を書いて macOS で落ちた。timeout も stock macOS に無い。
         # 判定対象はコードだけ — 「使うな」と書いたコメントに反応しては困る。
         scripts = [ROOT / "check.sh", ROOT / "install.sh", ROOT / "uninstall.sh"]
@@ -505,18 +492,16 @@ class UninstallScriptParityTest(unittest.TestCase):
                         f"uninstall が外さない配線: {sorted(written - canonical)}")
 
 
-class CiIsReachableTest(unittest.TestCase):
-    """CI が追跡されているか
+class SharedConfigTrackingTest(unittest.TestCase):
+    """共有すべき設定とローカル状態の gitignore 境界
 
-    `.gitignore` の `.*` は `.github/` も除外する。`!.github/` を落とすと
-    ワークフローが untracked になり、**CI が黙って消える**。そうなると他の
-    ガードも全部止まるので、ここが根元の単一障害点になる。
+    `.gitignore` の `.*` は `.claude/` も除外する。検証レシピは共有し、
+    マシンごとの設定・ログ・モードフラグは共有しない。
     """
 
     # (パス, 追跡されるべきか)。`.*` に食われて黙って共有されなくなるものと、
     # 逆に間違って共有されてはいけないローカル状態の両方を押さえる。
     PATHS = (
-        (".github/workflows/ci.yml", True),
         (".claude/skills/verify/SKILL.md", True),
         (".claude/settings.local.json", False),
         (".claude/log/session.md", False),
@@ -527,7 +512,6 @@ class CiIsReachableTest(unittest.TestCase):
     def test_gitignore_tracks_what_must_be_shared(self):
         # このリポジトリ自体が git リポジトリとは限らないので、使い捨ての
         # リポジトリに .gitignore だけ移して git 本体に判定させる。
-        self.assertTrue((ROOT / ".github" / "workflows" / "ci.yml").is_file())
         self.assertTrue((ROOT / ".claude" / "skills" / "verify" / "SKILL.md").is_file())
 
         with tempfile.TemporaryDirectory() as tmpdir:

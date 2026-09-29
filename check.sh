@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # check.sh — このリポジトリの完全検証コマンド
 #
-# CLAUDE.md の実行ループ手順6が指す対象。CI と Stop ゲートも同じものを呼ぶ。
+# CLAUDE.md の実行ループ手順6が指す対象。ローカル検証と Stop ゲートが同じものを呼ぶ。
 # 検証範囲を毎回組み立て直すと、その都度「どこまで見たか」が呼ぶ側の裁量になる。
 # 唯一の入口を用意して、範囲を固定する。
 #
 #   ./check.sh            全層（統合テスト込み、約25秒）
 #   ./check.sh --fast     遅い統合スイートを除外（約2秒）。Stop ゲートはこれ
-#   ./check.sh --mutants  ガードの棚卸し（約2.5分）。CI と手動のみ
+#   ./check.sh --mutants  ガードの棚卸し（約2.5分）。手動のみ
 #   ./check.sh --evals    スキル挙動の実測（課金される実 claude -p 呼び出し）。手動のみ
 #
 # `set -e` は使わない。最初の失敗で止めると残りの状態が分からず、直す順番を
 # 決められない。全部走らせてから落とす。
 #
-# **bash 3.2（macOS 既定）で動くこと。** CI は ubuntu の bash 5 しか見ていないので
-# ここが唯一の防波堤になる。`mapfile` / 連想配列 / `${x^^}` は bash 4+ 専用なので
+# **bash 3.2（macOS 既定）で動くこと。** 新しい bash での成功だけでは足りない。
+# `mapfile` / 連想配列 / `${x^^}` は bash 4+ 専用なので
 # 使わない（実際 mapfile を書いて macOS で落ちた）。同じ理由で `timeout` コマンドも
 # 使わない — GNU coreutils で、stock macOS には入っていない。
 
@@ -66,8 +66,8 @@ if command -v shellcheck >/dev/null 2>&1; then
     shellcheck install.sh uninstall.sh check.sh skills/*/scripts/*.sh || fail=1
     note "clean"
 else
-    # CI には必ず在る。ローカルに無いことを検証の欠落として黙らせない。
-    note "SKIPPED — shellcheck not installed (CI runs it)"
+    # ローカルに無いことを検証の欠落として黙らせない。
+    note "SKIPPED — shellcheck not installed (install it to run this check)"
 fi
 
 step "python syntax"

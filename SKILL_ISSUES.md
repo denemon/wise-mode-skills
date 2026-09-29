@@ -11,6 +11,7 @@
 ID: SKILL-REVIEW-008
 Severity: P0
 Status: Resolved (2026-08-23, commit a86d8c2 — `.github/workflows/ci.yml` を追加。`./check.sh` と `./check.sh --mutants` の 2 ジョブ。`tests/test_packaging.py::test_ci_calls_check_sh` が固定)
+Current policy (2026-09-30): ユーザーの意向で GitHub Actions CI とワークフロー必須のテスト・変異を撤去。検証はローカルの `./check.sh` と Stop ゲートで行う。
 Category: CI / Verification integrity
 Location: `tests/test_packaging.py:47`; `README.md:694`; `.github/workflows/ci.yml`(不存在)
 Problem: `tests/test_packaging.py:47` が `.github/workflows/ci.yml` を必須として読み込むが、そのファイルは存在せず、コミット履歴にもない。標準検証 `./check.sh` が最初から失敗する。

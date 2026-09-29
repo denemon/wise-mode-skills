@@ -822,20 +822,10 @@ MUTANTS: list[tuple[str, str, str, str, str, str]] = [
      "tests", "test_packaging"),
 
     # ── 配布物のレイアウト ────────────────────────────────────
-    ("gitignore: !.github/", ".gitignore", "!.github/", "",
-     "tests", "test_packaging"),
     ("gitignore: !.claude/", ".gitignore", "!.claude/", "",
      "tests", "test_packaging"),
     ("gitignore: ローカル状態の再除外", ".gitignore",
      ".claude/settings.local.json\n", "",
-     "tests", "test_packaging"),
-    # 回帰ジョブと監査ジョブは別々に潰せる。片方だけの変異では、もう片方の記述が
-    # 残ってガードが素通りした（監査の初回実行で SURVIVED として出た）。両方登録する。
-    ("CI: 回帰ジョブ", ".github/workflows/ci.yml",
-     "run: ./check.sh\n", "run: echo skip\n",
-     "tests", "test_packaging"),
-    ("CI: 変異監査ジョブ", ".github/workflows/ci.yml",
-     "./check.sh --mutants", "echo skip",
      "tests", "test_packaging"),
     ("CLAUDE.md: check.sh の名指し", "CLAUDE.md",
      "that is the single entrypoint `./check.sh`", "run the tests",

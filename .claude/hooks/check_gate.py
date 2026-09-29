@@ -34,7 +34,7 @@ STDERR_TAIL_LINES = 40
 
 # ゲートは `--fast`（約 2 秒、統合スイート 2 つを除外）を走らせる。フルは
 # 実測 24〜66 秒で、ターンごとに払うには重すぎるうえ、環境差でタイムアウトに
-# 触れる。取りこぼす層（install.sh と ai_review.sh の統合テスト）は CI が見る。
+# 触れる。取りこぼす層（install.sh と ai_review.sh の統合テスト）は手動で ./check.sh を回す。
 CHECK_ARGS = "--fast"
 CHECK_TIMEOUT = 45
 

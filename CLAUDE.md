@@ -606,8 +606,6 @@ CLAUDE.md instruction
 deterministic script
         +
 Claude Code Hook
-        +
-CI check
 ```
 
 over relying on `CLAUDE.md` alone.

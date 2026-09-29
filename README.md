@@ -711,9 +711,10 @@ Each suite runs under a timeout. A hang here has always meant recursion — a te
 invoking the tool that runs the tests — and it used to present as a silent stall.
 Now it fails in seconds saying so.
 
-CI runs the same script, and so does the Stop gate (below). Assembling the
-checks by hand instead leaves the scope up to whoever is running them — which
-is how "all tests pass" ends up meaning different things on different days.
+Verification is local-only; no GitHub Actions CI runs on pushes or pull requests.
+The Stop gate (below) uses the same script. Assembling the checks by hand instead
+leaves the scope up to whoever is running them — which is how "all tests pass"
+ends up meaning different things on different days.
 
 Tests sit next to the code they cover, so they are split across three
 directories, and one suite at a time still works:
@@ -746,7 +747,7 @@ It gives up after three consecutive failures and hands back to you, and it skips
 the run entirely when no tracked source file changed since the last green — so
 conversational turns cost nothing.
 
-The gate runs `check.sh --fast`; the slow integration suites are CI's job.
+The gate runs `check.sh --fast`; run `./check.sh` locally for the slow integration suites.
 A run that times out is reported as *inconclusive*, never as green — otherwise
 one slow machine would cache a false pass and switch the gate off for good.
 
