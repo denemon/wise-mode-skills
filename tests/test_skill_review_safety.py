@@ -141,7 +141,7 @@ class AllowedToolsSyntaxTest(unittest.TestCase):
 
     # The documented command needs a real ripgrep binary. Claude Code exposes
     # `rg` only as a shell function, so subprocess.run() cannot see it there.
-    @unittest.skipUnless(shutil.which("rg"), "rg not installed (CI runs it)")
+    @unittest.skipUnless(shutil.which("rg"), "rg not installed")
     def test_security_review_secret_search_does_not_print_values(self):
         quick_wins = (SKILLS / "attack-on-hacker" / "references" /
                       "quick-wins.md").read_text(encoding="utf-8")

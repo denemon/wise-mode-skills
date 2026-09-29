@@ -34,7 +34,7 @@ STDERR_TAIL_LINES = 40
 
 # ゲートは `--fast`（約 2 秒、統合スイート 2 つを除外）を走らせる。フルは
 # 実測 24〜66 秒で、ターンごとに払うには重すぎるうえ、環境差でタイムアウトに
-# 触れる。取りこぼす層（install.sh と ai_review.sh の統合テスト）は CI が見る。
+# 触れる。取りこぼす層（install.sh と ai_review.sh の統合テスト）は手動で ./check.sh を回す。
 CHECK_ARGS = "--fast"
 CHECK_TIMEOUT = 45
 
@@ -262,7 +262,10 @@ def main(stdin_text: str | None = None) -> int:
         return ("pass" if proc.returncode == 0 else "fail"), proc.stdout + proc.stderr
 
     previous = load_state(state_path)
-    code, message, state = decide(previous, source_fingerprint(root), run_check)
+    # 監査中はキャッシュを使わず、変異したツリーの fingerprint も読まない。
+    # 緑の記録と一致していても run_check の判定不能を必ず通す。
+    fingerprint = None if audit_in_progress(root) else source_fingerprint(root)
+    code, message, state = decide(previous, fingerprint, run_check)
 
     state = carry_forward(previous, state)
 
